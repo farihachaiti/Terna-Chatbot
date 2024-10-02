@@ -56,7 +56,6 @@ results = vectorstore.query(
 )
 
 # Print text
-
 for result in results['metadatas']:
     for metadata in result:
         print(metadata['text'])
