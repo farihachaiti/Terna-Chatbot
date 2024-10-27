@@ -1,0 +1,28 @@
+langchain-unstructured
+unstructured-client
+chromadb
+langchain-chroma
+pytesseract
+backoff
+langgraph
+python-pptx
+unstructured[pptx]
+cmake
+poppler-utils
+setuptools>=65.5.0  # To match `--upgrade setuptools wheel`
+wheel>=0.40.0       # To match `--upgrade setuptools wheel`
+tesseract-ocr
+libreoffice
+Pillow
+langchain-core
+bitsandbytes
+langchain-huggingface>=0.0.15  # To match `--upgrade langchain-huggingface`
+unstructured-ingest
+cffi
+python-libmagic
+python-poppler
+nltk>=3.8.0  # To match `--upgrade nltk`
+unstructured[local-inference]
+streamlit
+boto3
+langchain-aws
