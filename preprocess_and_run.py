@@ -125,12 +125,12 @@ class PreProcessor:
                 client=self.bedrock_client, model_id=emb)
 
         os.environ["LANGCHAIN_TRACING_V2"]="true"
-        os.environ["LANGCHAIN_ENDPOINT"]=""
-        os.environ["LANGCHAIN_API_KEY"]=""
+        os.environ["LANGCHAIN_ENDPOINT"]="https://api.smith.langchain.com"
+        os.environ["LANGCHAIN_API_KEY"]="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"
         os.environ["LANGCHAIN_PROJECT"]="TERNA-chatbot"
 
 
-        os.environ["OPENAI_API_KEY"] = ""
+        os.environ["OPENAI_API_KEY"] = "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"
 
 
         # Set-up Unstructured API credentials
