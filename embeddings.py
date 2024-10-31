@@ -1,91 +1,99 @@
-import os
-import time
-import base64
-import io
-import pytesseract
 import boto3
 import json
-from uuid import uuid4
-from PIL import Image
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
-from langchain_community.embeddings import BedrockEmbeddings
-from langchain_core.documents import Document
-from langchain_chroma import Chroma
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+import logging
+from langchain_community.document_loaders import DirectoryLoader
+from langchain_community.document_loaders import UnstructuredPDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+import chromadb
+import os
 
-class PDFProcessor:
-    def __init__(self, p_dir, emb, llm, out_path):
-        self.persist_directory = p_dir
-        self.output_path = out_path
-        self.bedrock_client = boto3.client("bedrock-runtime", region_name="eu-central-1")
-        self.embeddings = BedrockEmbeddings(client=self.bedrock_client, model_id=emb)
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-    def extract_text_and_images(self, pdf_path):
-        import fitz  # PyMuPDF
-        doc = fitz.open(pdf_path)
-        text = ""
-        images = []
+class EmbeddingProcessor:
+    def __init__(self, model_id, chroma_collection_name, region="eu-central-1"):
+        self.client = boto3.client("bedrock-runtime", region_name=region)
+        self.model_id = model_id
+        self.chroma_client = chromadb.Client()
+        self.collection = self.chroma_client.get_or_create_collection(name=chroma_collection_name)
+        logger.info("Initialized EmbeddingProcessor with model_id: %s and chroma_collection_name: %s", model_id, chroma_collection_name)
 
-        for page in doc:
-            text += page.get_text()
-            image_list = page.get_images(full=True)
-            for img in image_list:
-                xref = img[0]
-                base_image = doc.extract_image(xref)
-                image_bytes = base_image["image"]
-                images.append(image_bytes)
+    def load_documents(self, path):
+        logger.info("Loading documents from path: %s", path)
+        loader = DirectoryLoader(path, glob="*.pdf", loader_cls=UnstructuredPDFLoader)
+        documents = loader.load()
+        logger.info("Loaded %d documents", len(documents))
+        return documents
 
-        return text, images
+    def create_embedding(self, text):
+        logger.info("Creating embedding for text: %s", text[:30])
+        request_payload = {
+            "inputText": text
+        }
+        request_body = json.dumps(request_payload)
 
-    def generate_embeddings(self, text_chunks):
-        uuids = [str(uuid4()) for _ in range(len(text_chunks))]
-        vector_store = Chroma(
-            collection_name="chroma_index",
-            embedding_function=self.embeddings,
-            persist_directory=self.persist_directory,
-        )
-        docs = [Document(page_content=chunk, metadata={}, id=uuid) for chunk in text_chunks]
-        vector_store.add_documents(documents=docs, ids=uuids)
-        return vector_store
+        try:
+            response = self.client.invoke_model(
+                modelId=self.model_id,
+                contentType="application/json",
+                accept="application/json",
+                body=request_body
+            )
+            model_response = json.loads(response["body"].read())
+            embedding = model_response.get("embedding")
+            logger.info("Successfully created embedding")
+            return embedding
+        except (boto3.exceptions.Boto3Error, Exception) as e:
+            logger.error("ERROR: Unable to generate embedding. Reason: %s", e)
+            return None
 
-    def process_pdf(self, pdf_path):
-        text, images = self.extract_text_and_images(pdf_path)
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-        text_chunks = text_splitter.split_text(text)
+    def store_embedding_in_chroma(self, document_id, embedding, document_text):
+        logger.info("Storing embedding for document ID: %s", document_id)
+        
+        #  lists
+        ids = [document_id] 
+        embeddings = [embedding]  
+        texts = [document_text]  
+        
+        try:
+            self.collection.add(
+                ids=ids,
+                embeddings=embeddings,
+                documents=texts
+            )
+            logger.info("Stored embedding for document ID %s in ChromaDB.", document_id)
+        except Exception as e:
+            logger.error("ERROR: Unable to store embedding for document ID %s. Reason: %s", document_id, e)
 
-        for image_bytes in images:
-            image = Image.open(io.BytesIO(image_bytes))
-            text_from_image = pytesseract.image_to_string(image)
-            text_chunks.extend(text_splitter.split_text(text_from_image))
+    def process_document(self, document):
+        logger.info("Processing document")
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        chunks = text_splitter.split_text(document.page_content)
 
-        vector_store = self.generate_embeddings(text_chunks)
-        return vector_store
+        # Use a unique identifier based on the document's filename or metadata
+        document_filename = document.metadata.get('source', 'unknown')  # Use the source field or filename
+        document_id_base = os.path.splitext(os.path.basename(document_filename))[0]  # Get filename without extension
+        
+        for chunk in chunks:
+            embedding = self.create_embedding(chunk)
+            if embedding:
+                # Create a unique document ID using filename and chunk text
+                document_id = f"{document_id_base}_{chunk[:30].replace(' ', '_')}" 
+                self.store_embedding_in_chroma(document_id, embedding, chunk)
+            else:
+                logger.warning("Embedding generation failed for chunk.")
 
-class PDFHandler(FileSystemEventHandler):
-    def __init__(self, processor):
-        self.processor = processor
+    def process_all_documents(self, path):
+        logger.info("Processing all documents in directory: %s", path)
+        documents = self.load_documents(path)
+        for doc in documents:
+            self.process_document(doc)
 
-    def on_created(self, event):
-        if event.is_directory:
-            return
-        if event.src_path.endswith(".pdf"):
-            print(f"New PDF detected: {event.src_path}")
-            self.processor.process_pdf(event.src_path)
+# supply the model_id and chroma_collection_name
+model_id = "amazon.titan-embed-text-v2:0"
+chroma_collection_name = "document_embeddings"
+processor = EmbeddingProcessor(model_id=model_id, chroma_collection_name=chroma_collection_name)
 
-def monitor_folder(folder_path, processor):
-    event_handler = PDFHandler(processor)
-    observer = Observer()
-    observer.schedule(event_handler, folder_path, recursive=False)
-    observer.start()
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        observer.stop()
-    observer.join()
-
-if __name__ == "__main__":
-    processor = PDFProcessor("./chroma_langchain_db", "amazon.titan-embed-text-v2:0", "eu.meta.llama3-2-1b-instruct-v1:0", "./unstructured-output/")
-    folder_to_monitor = "path/to/your/pdf/folder"
-    monitor_folder(folder_to_monitor, processor)
+# Process all documents in the 'DocumentStore' directory
+processor.process_all_documents("DocumentStore/")
