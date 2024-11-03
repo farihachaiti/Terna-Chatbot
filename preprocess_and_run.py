@@ -465,7 +465,7 @@ if __name__ == "__main__":
         for filename in os.listdir(output_directory):
             filepath = os.path.join(output_directory, filename)
             processor.elements.extend(elements_from_json(filepath))       
-            processor.process_directory(processor.elements)
+        processor.process_directory(processor.elements)
         placeholder.empty()
           # Create a button in the app
         if st.button("Process Documents"):
