@@ -101,8 +101,7 @@ class PreProcessor:
 
 
     def __init__(self, p_dir, emb, llm, out_path):
-        self.elements = []
-        self.persist_directory = p_dir
+ 
         # Set the NLTK data directory to a custom path
         #nltk.data.path.append('C:\\Users\\LENOVO\\AppData\\Roaming\\nltk_data')
 
@@ -114,7 +113,10 @@ class PreProcessor:
             # If not found, download it
             print("Downloading the 'punkt' tokenizer...")
             nltk.download('punkt')
-
+        # Initialize a set to keep track of added IDs
+        self.elements = []
+        self.persist_directory = p_dir
+    
         self.model_name = emb
         self.output_path = out_path
         #"sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
@@ -135,6 +137,7 @@ class PreProcessor:
 
         # Set-up Unstructured API credentials
         self.llm = ChatBedrock(client=self.bedrock_client, model_id=llm)
+        
 
 
 
@@ -339,7 +342,7 @@ class PreProcessor:
         )
         docs = filter_complex_metadata(chunks)
         vector_store.add_documents(documents=docs, ids=uuids)
-
+        self.add_document_with_tracking([str(id) for id in uuids])
         return vector_store
 
 
@@ -372,7 +375,7 @@ class PreProcessor:
 
     def process_pptx_data(self, pptx_elements):
         # Create Document instances
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=150)
         documents = []
         
         for element in pptx_elements:
@@ -397,7 +400,7 @@ class PreProcessor:
                     element.metadata = element.metadata.to_dict()  # Convert ElementMetadata to a dictionary
                 elif hasattr(element, 'metadata'):
                     print(f"Metadata is not convertible to dictionary for element: {element}")
-                    continue  # Skip if metadata is not in a valid format
+                    #continue  # Skip if metadata is not in a valid format
                 
                 element.metadata["source"] = element.metadata.get("filename", "unknown")  # Set source
                 
@@ -438,6 +441,7 @@ class PreProcessor:
             docs = filter_complex_metadata(chunks)
             # Add documents to the vector store
             vector_store.add_documents(documents=docs, ids=uuids)
+  
 
         else:
             print("Error: Vector Store not found! Creating and loading...")
@@ -452,18 +456,48 @@ class PreProcessor:
         os.kill(pid, signal.SIGINT)
 
 
+    def delete_from_vectorstore(self, file_path):
+        # Assume documents are indexed with a metadata field `file_path`
+        try:
+            file_directory, filename = os.path.split(file_path)
+            #processor.vector_store = processor.load_or_initialize_vector_store(processor.embeddings, processor.elements)
+                # Save the vector store
+            vector_store = Chroma(
+            collection_name="chroma_index",
+            embedding_function=self.embeddings,
+            persist_directory=self.persist_directory,  # Where to save data locally, remove if not necessary
+            )
+            coll = vector_store.get()  # dict_keys(['ids', 'embeddings', 'documents', 'metadatas'])
+            ids_to_del = []
+
+            for idx in range(len(coll['ids'])):
+
+                id = coll['ids'][idx]
+                metadata = coll['metadatas'][idx]
+                if metadata['filename'] == filename:
+                    ids_to_del.append(id)
+
+  
+            vector_store.adelete(ids=ids_to_del) 
+          
+            print(f"Deleted vectorstore entry for {file_path}")
+
+        except Exception as e:
+            print(f"Error deleting from vectorstore: {e}")
+
+
 
 if __name__ == "__main__":
     st.title("TERNA Chatbot")
-    #run_pip_installations()
-    #processor = PreProcessor("./chroma_langchain_db", "BAAI/bge-m3", "meta-llama/Llama-3.1-8B-Instruct", "./unstructured-output/")
+    # Display chat history in the sidebar
+    st.sidebar.title("Chat History")
     placeholder = st.empty()
     processor = PreProcessor("./chroma_langchain_db", "amazon.titan-embed-text-v2:0", "eu.meta.llama3-2-1b-instruct-v1:0", "./unstructured-output/")
     if not os.path.exists(processor.output_path) or not os.listdir(processor.output_path): 
         placeholder.write("Processing documents...")
         output_directory = processor.ingest_documents(os.path.join(os.getcwd(), 'files'))
-        for filename in os.listdir(output_directory):
-            filepath = os.path.join(output_directory, filename)
+        for filename in os.listdir(processor.output_path):
+            filepath = os.path.join(processor.output_path, filename)
             processor.elements.extend(elements_from_json(filepath))       
         processor.process_directory(processor.elements)
         placeholder.empty()
@@ -502,8 +536,4 @@ if __name__ == "__main__":
         #have to separate it from the loading process
         chatbot.process_answer(st)
 
-        
-        
-
     
-
