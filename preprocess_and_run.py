@@ -490,7 +490,6 @@ class PreProcessor:
 if __name__ == "__main__":
     st.title("TERNA Chatbot")
     # Display chat history in the sidebar
-    st.sidebar.title("Chat History")
     placeholder = st.empty()
     processor = PreProcessor("./chroma_langchain_db", "amazon.titan-embed-text-v2:0", "eu.meta.llama3-2-1b-instruct-v1:0", "./unstructured-output/")
     if not os.path.exists(processor.output_path) or not os.listdir(processor.output_path): 
