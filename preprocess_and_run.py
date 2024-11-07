@@ -508,6 +508,8 @@ if __name__ == "__main__":
     st.title("TERNA Chatbot")
     # Display chat history in the sidebar
     placeholder = st.empty()
+    if 'chat_history' not in st.session_state:
+        st.session_state['chat_history'] = []
     processor = PreProcessor("./chroma_langchain_db", "amazon.titan-embed-text-v2:0", "eu.meta.llama3-2-1b-instruct-v1:0", "./unstructured-output/")
     if not os.path.exists(processor.persist_directory) or len(os.listdir(processor.persist_directory)) <= 1:
         placeholder.write("Processing documents...")
