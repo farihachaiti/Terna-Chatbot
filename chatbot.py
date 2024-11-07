@@ -298,6 +298,8 @@ class Chatbot:
             | self.processor.llm
             | StrOutputParser()
         )
+
+        rag_chain.invoke(question)
         contextualize_q_system_template = """
             Based on the content of the retrieved context: {context} related to your question,
             give answer based on the context only.
