@@ -3,10 +3,12 @@ import warnings
 import os
 warnings.filterwarnings('ignore')
 import signal
+import shutil
 ##
 
 
 ##
+
 import chromadb
 import time
 import random
@@ -49,6 +51,7 @@ from unstructured_client.models.errors import SDKError
 
 from unstructured_ingest.connector.local import SimpleLocalConfig
 from unstructured_ingest.interfaces import PartitionConfig, ProcessorConfig, ReadConfig
+from unstructured_ingest.v2.processes.chunker import ChunkerConfig
 from unstructured.partition.auto import partition
 from unstructured_ingest.runner import LocalRunner
 from unstructured.documents.elements import Title, Text, NarrativeText, Table, ListItem, Image
@@ -95,6 +98,7 @@ import getpass
 from chatbot import Chatbot
 from headers import run_pip_installations
 import streamlit as st
+from docling_converter import DoclingFileLoader
 
 
 class PreProcessor:
@@ -216,6 +220,7 @@ class PreProcessor:
                 # Extract table content row-by-row
                 
                 #table_content = self.extract_table_data(element)
+                print(element)
                 tables.append(element)
 
         #print(tables[0].text)
@@ -246,7 +251,7 @@ class PreProcessor:
 
         return docs
     
-    import re
+
 
     def process_table_text(self, text):
         """
@@ -342,12 +347,31 @@ class PreProcessor:
         )
         docs = filter_complex_metadata(chunks)
         vector_store.add_documents(documents=docs, ids=uuids)
-        self.add_document_with_tracking([str(id) for id in uuids])
+
         return vector_store
 
-
+    def delete_directory_contents(self, directory_path):
+        # Convert string path to Path object
+        path = Path(directory_path)
+        
+        # Check if it's a valid directory
+        if path.is_dir():
+            # Iterate over each item in the directory
+            for item in path.iterdir():
+                try:
+                    # If the item is a file, delete it
+                    if item.is_file() or item.is_symlink():
+                        item.unlink()  # Removes the file
+                    # If the item is a directory, delete it recursively
+                    elif item.is_dir():
+                        shutil.rmtree(item)  # Removes the directory and all contents
+                except Exception as e:
+                    print(f"Failed to delete {item}: {e}")
+        else:
+            raise ValueError(f"The path {directory_path} is not a valid directory.")
+    
     # Function to initialize or load vector store
-    def load_or_initialize_vector_store(self, embeddings, elements):
+    def load_or_initialize_vector_store(self, embeddings, elements=None):
         try:
             # Attempt to load an existing vector store
             vector_store = Chroma(collection_name='chroma_index', persist_directory=self.persist_directory, embedding_function=self.embeddings)  # Using Chroma, replace with FAISS if necessary
@@ -373,51 +397,43 @@ class PreProcessor:
             vector_store = self.generate_embedding(chunks)
             return vector_store  # Return the new vector store
 
-    def process_pptx_data(self, pptx_elements):
-        # Create Document instances
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=150)
-        documents = []
-        
-        for element in pptx_elements:
-            # Extract the text from the element, assuming element is a structured object
-
-            if hasattr(element, 'text') and element.category != "Table" and element.category != "Image":
-                text = element.text  # Extract text
-            else:
-                continue  # Skip to the next element if there's no text
-
-            # Check if the extracted text is a string
-            if not isinstance(text, str):
-                print(f"Expected a string, but got {type(text)} for element: {element}")
-                continue  # Skip to the next element if it's not a string
-
-            # Split the content using text_splitter
-            chunks = text_splitter.split_text(text)
+    def get_files_from_directory(self, file_path):
+        # If the input is a list of file paths, use it directly
+        if isinstance(file_path, list):
+            self._file_paths = file_path
+        else:
+            # If it's a directory path, check if it's a valid directory
+            directory_path = Path(file_path)
             
-            for chunk in chunks:
-                # Prepare metadata
-                if hasattr(element, 'metadata') and hasattr(element.metadata, 'to_dict'):
-                    element.metadata = element.metadata.to_dict()  # Convert ElementMetadata to a dictionary
-                elif hasattr(element, 'metadata'):
-                    print(f"Metadata is not convertible to dictionary for element: {element}")
-                    #continue  # Skip if metadata is not in a valid format
-                
-                element.metadata["source"] = element.metadata.get("filename", "unknown")  # Set source
-                
-                # Create a Document instance
-                doc = Document(
-                    page_content=chunk,
-                    metadata=element.metadata,  # Retain the original metadata
-                    id=str(uuid4())
-                )
+            if directory_path.is_dir():
+                # List all files (excluding directories) in the specified directory
+                self._file_paths = [
+                    str(directory_path / f) for f in os.listdir(directory_path)
+                    if (directory_path / f).is_file()
+                ]
+            elif directory_path.is_file():
+                # If it's a valid file, treat it as a single file path
+                self._file_paths = [str(directory_path)]
 
-                documents.append(doc)
+            else:
+                # If it's neither a file nor a directory, raise an error or handle it accordingly
+                raise ValueError(f"The path {file_path} is neither a valid directory nor a file.")
 
-        final_documents = self.get_image_block_types(pptx_elements, documents)
-        return final_documents
+
+    def process_pptx_data(self, pptx_elements=None):
+        # Create Document instances
+        file_list = self.get_files_from_directory(os.path.join(os.getcwd(), 'files'))
+
+        loader = DoclingFileLoader(file_path=self._file_paths)
+
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=200, add_start_index=True)
+        docs = loader.load()
+        splits = text_splitter.split_documents(docs)
+        
+        return splits #final_documents
 
     # Main function to tie everything together
-    def process_directory(self, elements, query=None, max_tokens=1000):
+    def process_directory(self, elements=None, query=None, max_tokens=1000):
         # Load or initialize the vector store
         vector_store = self.load_or_initialize_vector_store(self.embeddings, elements)
         # Process the PPTX data again to obtain chunks
@@ -441,7 +457,7 @@ class PreProcessor:
             docs = filter_complex_metadata(chunks)
             # Add documents to the vector store
             vector_store.add_documents(documents=docs, ids=uuids)
-  
+                
 
         else:
             print("Error: Vector Store not found! Creating and loading...")
@@ -492,19 +508,16 @@ if __name__ == "__main__":
     # Display chat history in the sidebar
     placeholder = st.empty()
     processor = PreProcessor("./chroma_langchain_db", "amazon.titan-embed-text-v2:0", "eu.meta.llama3-2-1b-instruct-v1:0", "./unstructured-output/")
-    if not os.path.exists(processor.output_path) or not os.listdir(processor.output_path): 
+    if not os.path.exists(processor.persist_directory) or len(os.listdir(processor.persist_directory)) <= 1:
         placeholder.write("Processing documents...")
-        output_directory = processor.ingest_documents(os.path.join(os.getcwd(), 'files'))
-        for filename in os.listdir(processor.output_path):
-            filepath = os.path.join(processor.output_path, filename)
-            processor.elements.extend(elements_from_json(filepath))       
-        processor.process_directory(processor.elements)
+       
+        processor.process_directory()
         placeholder.empty()
           # Create a button in the app
         if st.button("Process Documents"):
             # Call the processing function when the button is clicked
             placeholder.write("Processing documents...")
-            processor.process_directory(processor.elements)
+            processor.process_directory()
         placeholder.empty()
         if st.button("Clear Chat History"):
             st.session_state['chat_history'].clear()
@@ -517,14 +530,13 @@ if __name__ == "__main__":
 
             
     else:
-        for filename in os.listdir(processor.output_path):
-            filepath = os.path.join(processor.output_path, filename)
-            processor.elements.extend(elements_from_json(filepath))
+  
         # Create a button in the app
         if st.button("Process Documents"):
             # Call the processing function when the button is clicked
             placeholder.write("Processing documents...")
-            processor.process_directory(processor.elements)
+            processor.delete_directory_contents(processor.persist_directory)
+            processor.process_directory()
         placeholder.empty()
         if st.button("Clear Chat History"):
             st.session_state['chat_history'].clear()
@@ -535,4 +547,8 @@ if __name__ == "__main__":
         #have to separate it from the loading process
         chatbot.process_answer(st)
 
+        
+        
+
     
+

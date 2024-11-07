@@ -10,7 +10,7 @@ import chromadb
 import time
 import random
 ##
-
+from typing import Iterable
 # Pre-process the pdf file
 os.environ['USER_AGENT'] = 'TERNAbot/1.0'
 import multiprocessing
@@ -189,7 +189,7 @@ class Chatbot:
         return final_documents  # Return the documents list
 
     # Function to find similar chunks based on cosine similarity
-    def find_similar_chunks(self, chunks, query_embedding, k=5):
+    def find_similar_chunks(self, chunks, query_embedding, k=1):
         """Calculate cosine similarity and retrieve the top k similar chunks."""
 
         # Ensure that both chunks and query_embedding are not empty
@@ -248,31 +248,23 @@ class Chatbot:
 
 
     # Main QA pipeline
-    def qa_pipeline(self, st, vectorstore, question):
-        """Conduct a question-answering session using the provided vectorstore and manage chat history within the same function."""
+    def qa_pipeline(self, st, vectorstore, question, results):
+
 
         # Initialize an empty chat history
         #chat_history = []
         if 'chat_history' not in st.session_state:
             st.session_state['chat_history'] = []
 
+
+        for speaker, message in st.session_state.chat_history:
+            st.write(f"**{speaker}:** {message}")
+            #st.sidebar.write(f"**{speaker}:** {message}")
+            
         # Display existing chat history
-        for message in st.session_state['chat_history']:
-            st.write(message)
+        #for message in st.session_state['chat_history']:
+            
 
-        # Step 1: Conversation loop
-        #while True:
-            # Determine the question to ask
-            #print(query)
-            #if query:
-            #    question = query
-            #else:
-        #question = st.text_input("Ask a question (type 'exit' to quit): ")  # For console-based interaction
-
-        # Check for exit command
-        #if question.lower() == 'exit':
-            #st.info("Ending conversation.")
-            #break
         if not question:
             st.write("Please ask a valid question.")
             #continue
@@ -282,50 +274,38 @@ class Chatbot:
             search_type="similarity",
             search_kwargs={"k": 1}  # Retrieve the top 1 most similar document
         )
-
-        # Step 3: Retrieve context from the vector store
-        results = retriever.invoke(question)
-
-        if not results:
-            st.warning("No relevant information found.")
-            #continue
-
-        format_docs = " ".join([doc.page_content for doc in results])
+        
+        def format_docs(docs: Iterable[Document]):
+            return "\n\n".join(doc.page_content for doc in docs)
 
 
         # Step 4: Define the system prompt with the retrieved context
         # Step 4: Define the system prompt with the retrieved context
         template = """
-            ONLY answer based on  the retrieved context: {context} Only answer to the question {input} that the human asks you during the current conversation.
-            Only give reference from retrieved context: {context}
-            If you don't know the answer, just say that you do not have the relevant information needed to provide a verified answer.
-            When providing an answer, aim for clarity and precision.
-            If questions are asked in Italian, only then answer in Italian; otherwise, always answer in English.
+     "Context information is below.\n---------------------\n{context}\n---------------------\nGiven the context information and not prior knowledge, answer the query.\nQuery: {input}\nAnswer:\n"
+)
             """
 
         prompt = ChatPromptTemplate.from_template(template)
 
         #custom_rag_prompt = PromptTemplate.from_template(template)
-        st.session_state['chat_history'].append(f"You: {question}")
+        st.session_state['chat_history'].append(("You", question))
 
 
         rag_chain = (
-            {"context": retriever,  "input": RunnablePassthrough()}
+            {"context": retriever | format_docs, "input": RunnablePassthrough()}
             | prompt
             | self.processor.llm
             | StrOutputParser()
         )
         contextualize_q_system_template = """
-            Based on the content of the retrieved context: {context} in the source related to your question,
-            give answer explaining the question : {input} with examples if possible. 
+            Based on the content of the retrieved context: {context} related to your question,
+            give answer based on the context only.
             Include relevant aspects of the topic of the asked question: {input}. 
-            If possible, clarify any related phenomena mentioned on the slide of the retrieved context : {context} 
-            of the source document and emphasize how your answer is relevant to the question : {input}.
-            Given a chat history and the latest user question \
-            which might reference context in the chat history,
-            answer to question: {input} if asked from that
-            chat history combining with the page_content of the source docuement of the retrieved context: {context}. 
-            Only answer based on the retrieved page_content of the context: {context} and the current chat history: {chat_history}. 
+            Given a chat history and the latest user question
+            which might reference context in the chat history, 
+            only answer in short, based on the retrieved context: {context} from the documents.
+            Use chat history: {chat_history} only if asked questions from there. Otherwise, do not use chat history: {chat_history}
             """
 
 
@@ -351,11 +331,7 @@ class Chatbot:
             "maxTokens": 3000,       # The retrieved context
             "chat_history": st.session_state['chat_history']           # An empty chat history
             })
-        #response = rag_chain.invoke({"context": history_aware_retriever, "input": question, "chat_history": chat_history})
 
-        # Step 9: Update the chat history with the current exchange
-        # Assuming response['answer'] contains the output from the model
-                # Streaming the response
         st.info("Bot: ")
         with st.empty(): 
              # Create a placeholder for dynamic updates
@@ -368,18 +344,8 @@ class Chatbot:
         
         st.info(f"Source: {response['context']}")
         # Step 11: Option to continue or end the conversation
-        st.session_state['chat_history'].append(f"Bot: {response['answer']}")
-        
-        '''exit_prompt = st.text_input("Do you want to ask another question? (Type 'no' to end conversation.): ").strip().lower()
-        if exit_prompt == 'no':
-            st.info("Ending conversation.")
-            break
-        else:
-            query = exit_prompt'''
-
-
-
-
+        st.session_state['chat_history'].append(("Bot", response['answer']))
+  
 
 
     def process_unstructured_image_data(self, yolox_elements, documents):
@@ -456,7 +422,7 @@ class Chatbot:
                             # Perform similarity search with the query
 
                             results = vector_store.similarity_search_with_score(query, k=1)
-
+                            print(results)
                             #NEED TO WORK HERE
                             if not results:
                                 # If results are found, process and return them
@@ -468,7 +434,7 @@ class Chatbot:
                                 # Save the new vector store
                     
                                 query_embedding = self.generate_query_embedding(query)
-                                new_chunks = self.find_similar_chunks(chunks, query_embedding, k=5)
+                                new_chunks = self.find_similar_chunks(chunks, query_embedding, k=1)
                             
                                 docs = filter_complex_metadata(new_chunks)
                                 uuids = [str(uuid4()) for _ in range(len(docs))]
@@ -486,18 +452,8 @@ class Chatbot:
                             # Initialize a new vector store
                             # Save the new vector store
                             vector_store = self.processor.generate_embedding(chunks)
-                    self.qa_pipeline(st, vector_store, query)
+                    self.qa_pipeline(st, vector_store, query, results)
                     
-
-            #multiprocessing.set_start_method('spawn')
-            #search_query = "Are aphids a pest?"
-            #search_url = "/"  # Path to your document file
-
-
-
-
-
-
     
     # Backoff for handling rate limiting in completions
     '''@backoff.on_exception(backoff.expo, openai.RateLimitError, max_tries=5)
