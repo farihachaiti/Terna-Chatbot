@@ -248,7 +248,7 @@ class Chatbot:
 
 
     # Main QA pipeline
-    def qa_pipeline(self, st, vectorstore, question, results):
+    def qa_pipeline(self, st, vectorstore, question, results=None):
 
 
         # Initialize an empty chat history
@@ -282,7 +282,7 @@ class Chatbot:
         # Step 4: Define the system prompt with the retrieved context
         # Step 4: Define the system prompt with the retrieved context
         template = """
-     "Context information is below.\n---------------------\n{context}\n---------------------\nGiven the context information and not prior knowledge, answer the query.\nQuery: {input}\nAnswer:\n"
+     "Context information is below.\n---------------------\n{context}\n---------------------\nGiven the context information and not prior knowledge, answer the query. Answer in Italian language if question is asked in Italian otherwise, answer in English language.\nQuery: {input}\nAnswer:\n"
 )
             """
 
@@ -421,28 +421,6 @@ class Chatbot:
                         # Step 1: Check if vectore exists and if exists then if embedded chunk already exists in the vectorstore. Then Load and split the document, including handling images and OCR
                     vector_store = self.processor.load_or_initialize_vector_store(self.processor.embeddings, self.processor.elements)
                     if vector_store:
-                            # Perform similarity search with the query
-
-                            results = vector_store.similarity_search_with_score(query, k=1)
-                            print(results)
-                            #NEED TO WORK HERE
-                            if not results:
-                                # If results are found, process and return them
-                                print("No results found for the search query. Adding new information to database.")
-                                # Update the vector store if no results were found
-                
-                                chunks = self.processor.process_pptx_data(self.processor.elements) # etar ekta bebostha korte hobe
-                                # Initialize a new vector store
-                                # Save the new vector store
-                    
-                                query_embedding = self.generate_query_embedding(query)
-                                new_chunks = self.find_similar_chunks(chunks, query_embedding, k=1)
-                            
-                                docs = filter_complex_metadata(new_chunks)
-                                uuids = [str(uuid4()) for _ in range(len(docs))]
-                                vector_store.add_documents(documents=docs, ids=uuids)
-
-                            else:
                                 pass
                         # Save the updated vector store
                     else:
@@ -454,7 +432,7 @@ class Chatbot:
                             # Initialize a new vector store
                             # Save the new vector store
                             vector_store = self.processor.generate_embedding(chunks)
-                    self.qa_pipeline(st, vector_store, query, results)
+                    self.qa_pipeline(st, vector_store, query)
                     
     
     # Backoff for handling rate limiting in completions
