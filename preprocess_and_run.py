@@ -510,6 +510,8 @@ if __name__ == "__main__":
     placeholder = st.empty()
     if 'chat_history' not in st.session_state:
         st.session_state['chat_history'] = []
+    if 'context_history' not in st.session_state:
+        st.session_state['context_history'] = []
     processor = PreProcessor("./chroma_langchain_db", "amazon.titan-embed-text-v2:0", "eu.meta.llama3-2-1b-instruct-v1:0", "./unstructured-output/")
     if not os.path.exists(processor.persist_directory) or len(os.listdir(processor.persist_directory)) <= 1:
         placeholder.write("Processing documents...")
@@ -524,6 +526,7 @@ if __name__ == "__main__":
         placeholder.empty()
         if st.button("Clear Chat History"):
             st.session_state['chat_history'].clear()
+            st.session_state['context_history'].clear()
         if st.button("Shut Down App"):
             st.warning("Shutting down the app...")
             processor.shutdown_app()
@@ -543,6 +546,7 @@ if __name__ == "__main__":
         placeholder.empty()
         if st.button("Clear Chat History"):
             st.session_state['chat_history'].clear()
+            st.session_state['context_history'].clear()
         if st.button("Shut Down App"):
             st.warning("Shutting down the app...")
             processor.shutdown_app()

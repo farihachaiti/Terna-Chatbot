@@ -256,6 +256,8 @@ class Chatbot:
         if 'chat_history' not in st.session_state:
             st.session_state['chat_history'] = []
 
+        if 'context_history' not in st.session_state:
+            st.session_state['context_history'] = []
 
         for speaker, message in st.session_state.chat_history:
             st.write(f"**{speaker}:** {message}")
@@ -301,13 +303,9 @@ class Chatbot:
 
         rag_chain.invoke(question)
         contextualize_q_system_template = """
-            Based on the content of the retrieved context: {context} related to your question,
-            give answer based on the context only.
-            Include relevant aspects of the topic of the asked question: {input}. 
-            Given a chat history and the latest user question
+            Given a chat history {chat_history} and the latest user question {input}
             which might reference context in the chat history, 
-            only answer in short, based on the retrieved context: {context} from the documents.
-            Use chat history: {chat_history} only if asked questions from there. Otherwise, do not use chat history: {chat_history}
+            answer precisely based on the retrieved context: {context} from the documents.
             """
 
 
@@ -326,28 +324,35 @@ class Chatbot:
         @retry_with_exponential_backoff  # Add retry to chain invocation
         def get_response(input_data):
             return rag_chain.invoke(input_data)
+        
+        # Check if there are at least two items in chat_history
+        if len(st.session_state['context_history']) >= 1:
+            last_two_messages = st.session_state['context_history'][-1:]
+        else:
+            # If there are fewer than two items, just return the available items (or handle as needed)
+            last_two_messages = []
 
         response = get_response({
             "input": question,            # The user’s question
             "context": history_aware_retriever, 
             "maxTokens": 3000,       # The retrieved context
-            "chat_history": st.session_state['chat_history']           # An empty chat history
+            "chat_history": last_two_messages,      # An empty chat history
             })
-
-        st.info("Bot: ")
+        st.info(f"You: {question}")
+        resp = "Bot: "
         with st.empty(): 
-             # Create a placeholder for dynamic updates
+             # Create a placeholder for dynamic update
             for chunk in self.stream_response(response['answer']):
-                st.info(chunk)  # Stream the response chunk by chunk
-        '''if len(response['answer']) > 3000:  # Adjust based on your needs
-            st.info(f"Bot: {response['answer'][:3000] + "..."}") # Show first 1000 chars and indicate truncation
-        else:
-            st.info(f"Bot: {response['answer']}")'''
+                if st.empty():
+                    st.info(resp + chunk)                 
+                else:
+                    st.info(chunk)
+
         
         st.info(f"Source: {response['context']}")
         # Step 11: Option to continue or end the conversation
         st.session_state['chat_history'].append(("Bot", response['answer']))
-  
+        st.session_state['context_history'].append(response['context'])
 
 
     def process_unstructured_image_data(self, yolox_elements, documents):
