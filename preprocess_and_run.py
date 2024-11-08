@@ -336,17 +336,18 @@ class PreProcessor:
     @backoff.on_exception(backoff.expo, openai.RateLimitError, max_tries=10)
     def generate_embedding(self, chunks):
         """Generate embedding for the user query with rate limit handling."""
-        uuids = [str(uuid4()) for _ in range(len(chunks))]
+        #uuids = [str(uuid4()) for _ in range(len(chunks))]
 
 
         # Save the vector store
-        vector_store = Chroma(
+        vector_store = Chroma.from_documents(
+        documents=chunks,
         collection_name="chroma_index",
-        embedding_function=self.embeddings,
+        embedding=self.embeddings,
         persist_directory=self.persist_directory,  # Where to save data locally, remove if not necessary
         )
-        docs = filter_complex_metadata(chunks)
-        vector_store.add_documents(documents=docs, ids=uuids)
+        #docs = filter_complex_metadata(chunks)
+        #vector_store.add_documents(documents=docs, ids=uuids)
 
         return vector_store
 
@@ -447,17 +448,17 @@ class PreProcessor:
         if vector_store:
 
             # Generate UUIDs for each chunk
-            uuids = [str(uuid4()) for _ in range(len(chunks))]
+            #uuids = [str(uuid4()) for _ in range(len(chunks))]
 
             # Check if uuids are generated
-            if not uuids:
-                print(f"No UUIDs generated for chunks. Skipping...")
-                return
+            #if not uuids:
+            #    print(f"No UUIDs generated for chunks. Skipping...")
+            #    return
             
-            docs = filter_complex_metadata(chunks)
+            #docs = filter_complex_metadata(chunks)
             # Add documents to the vector store
-            vector_store.add_documents(documents=docs, ids=uuids)
-                
+            #vector_store.add_documents(documents=docs, ids=uuids)
+            vector_store = self.generate_embedding(chunks) 
 
         else:
             print("Error: Vector Store not found! Creating and loading...")
@@ -507,6 +508,10 @@ if __name__ == "__main__":
     st.title("TERNA Chatbot")
     # Display chat history in the sidebar
     placeholder = st.empty()
+    if 'chat_history' not in st.session_state:
+        st.session_state['chat_history'] = []
+    if 'context_history' not in st.session_state:
+        st.session_state['context_history'] = []
     processor = PreProcessor("./chroma_langchain_db", "amazon.titan-embed-text-v2:0", "eu.meta.llama3-2-1b-instruct-v1:0", "./unstructured-output/")
     if not os.path.exists(processor.persist_directory) or len(os.listdir(processor.persist_directory)) <= 1:
         placeholder.write("Processing documents...")
@@ -521,6 +526,7 @@ if __name__ == "__main__":
         placeholder.empty()
         if st.button("Clear Chat History"):
             st.session_state['chat_history'].clear()
+            st.session_state['context_history'].clear()
         if st.button("Shut Down App"):
             st.warning("Shutting down the app...")
             processor.shutdown_app()
@@ -540,6 +546,7 @@ if __name__ == "__main__":
         placeholder.empty()
         if st.button("Clear Chat History"):
             st.session_state['chat_history'].clear()
+            st.session_state['context_history'].clear()
         if st.button("Shut Down App"):
             st.warning("Shutting down the app...")
             processor.shutdown_app()

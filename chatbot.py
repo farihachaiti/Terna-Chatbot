@@ -248,7 +248,7 @@ class Chatbot:
 
 
     # Main QA pipeline
-    def qa_pipeline(self, st, vectorstore, question, results):
+    def qa_pipeline(self, st, vectorstore, question, results=None):
 
 
         # Initialize an empty chat history
@@ -256,6 +256,8 @@ class Chatbot:
         if 'chat_history' not in st.session_state:
             st.session_state['chat_history'] = []
 
+        if 'context_history' not in st.session_state:
+            st.session_state['context_history'] = []
 
         for speaker, message in st.session_state.chat_history:
             st.write(f"**{speaker}:** {message}")
@@ -282,7 +284,7 @@ class Chatbot:
         # Step 4: Define the system prompt with the retrieved context
         # Step 4: Define the system prompt with the retrieved context
         template = """
-     "Context information is below.\n---------------------\n{context}\n---------------------\nGiven the context information and not prior knowledge, answer the query.\nQuery: {input}\nAnswer:\n"
+     "Context information is below.\n---------------------\n{context}\n---------------------\nGiven the context information and not prior knowledge, answer the query. Answer in Italian language if question is asked in Italian otherwise, answer in English language.\nQuery: {input}\nAnswer:\n"
 )
             """
 
@@ -298,14 +300,12 @@ class Chatbot:
             | self.processor.llm
             | StrOutputParser()
         )
+
+        rag_chain.invoke(question)
         contextualize_q_system_template = """
-            Based on the content of the retrieved context: {context} related to your question,
-            give answer based on the context only.
-            Include relevant aspects of the topic of the asked question: {input}. 
-            Given a chat history and the latest user question
+            Given a chat history {chat_history} and the latest user question {input}
             which might reference context in the chat history, 
-            only answer in short, based on the retrieved context: {context} from the documents.
-            Use chat history: {chat_history} only if asked questions from there. Otherwise, do not use chat history: {chat_history}
+            answer precisely based on the retrieved context: {context} from the documents.
             """
 
 
@@ -324,28 +324,35 @@ class Chatbot:
         @retry_with_exponential_backoff  # Add retry to chain invocation
         def get_response(input_data):
             return rag_chain.invoke(input_data)
+        
+        # Check if there are at least two items in chat_history
+        if len(st.session_state['context_history']) >= 1:
+            last_two_messages = st.session_state['context_history'][-1:]
+        else:
+            # If there are fewer than two items, just return the available items (or handle as needed)
+            last_two_messages = []
 
         response = get_response({
             "input": question,            # The user’s question
             "context": history_aware_retriever, 
             "maxTokens": 3000,       # The retrieved context
-            "chat_history": st.session_state['chat_history']           # An empty chat history
+            "chat_history": last_two_messages,      # An empty chat history
             })
-
-        st.info("Bot: ")
+        st.info(f"You: {question}")
+        resp = "Bot: "
         with st.empty(): 
-             # Create a placeholder for dynamic updates
+             # Create a placeholder for dynamic update
             for chunk in self.stream_response(response['answer']):
-                st.info(chunk)  # Stream the response chunk by chunk
-        '''if len(response['answer']) > 3000:  # Adjust based on your needs
-            st.info(f"Bot: {response['answer'][:3000] + "..."}") # Show first 1000 chars and indicate truncation
-        else:
-            st.info(f"Bot: {response['answer']}")'''
+                if st.empty():
+                    st.info(resp + chunk)                 
+                else:
+                    st.info(chunk)
+
         
         st.info(f"Source: {response['context']}")
         # Step 11: Option to continue or end the conversation
         st.session_state['chat_history'].append(("Bot", response['answer']))
-  
+        st.session_state['context_history'].append(response['context'])
 
 
     def process_unstructured_image_data(self, yolox_elements, documents):
@@ -419,28 +426,6 @@ class Chatbot:
                         # Step 1: Check if vectore exists and if exists then if embedded chunk already exists in the vectorstore. Then Load and split the document, including handling images and OCR
                     vector_store = self.processor.load_or_initialize_vector_store(self.processor.embeddings, self.processor.elements)
                     if vector_store:
-                            # Perform similarity search with the query
-
-                            results = vector_store.similarity_search_with_score(query, k=1)
-                            print(results)
-                            #NEED TO WORK HERE
-                            if not results:
-                                # If results are found, process and return them
-                                print("No results found for the search query. Adding new information to database.")
-                                # Update the vector store if no results were found
-                
-                                chunks = self.processor.process_pptx_data(self.processor.elements) # etar ekta bebostha korte hobe
-                                # Initialize a new vector store
-                                # Save the new vector store
-                    
-                                query_embedding = self.generate_query_embedding(query)
-                                new_chunks = self.find_similar_chunks(chunks, query_embedding, k=1)
-                            
-                                docs = filter_complex_metadata(new_chunks)
-                                uuids = [str(uuid4()) for _ in range(len(docs))]
-                                vector_store.add_documents(documents=docs, ids=uuids)
-
-                            else:
                                 pass
                         # Save the updated vector store
                     else:
@@ -452,7 +437,7 @@ class Chatbot:
                             # Initialize a new vector store
                             # Save the new vector store
                             vector_store = self.processor.generate_embedding(chunks)
-                    self.qa_pipeline(st, vector_store, query, results)
+                    self.qa_pipeline(st, vector_store, query)
                     
     
     # Backoff for handling rate limiting in completions
