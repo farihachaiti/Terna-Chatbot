@@ -9,8 +9,7 @@ import base64
 import json
 from PIL import Image
 from io import BytesIO
-from wand.image import Image as WandImage
-import io
+import langid
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -280,21 +279,25 @@ class MsPowerpointDocumentBackend(DeclarativeDocumentBackend, PaginatedDocumentB
                 )
         return
     
-    def convert_wmf_to_jpeg(self, wmf_data):
+    def detect_language(self, doc):
+        if doc.texts:
+            text_samples = [item.text for item in doc.texts[:25]]
+            combined_text = " ".join(text_samples)
+            
+            try:
+                # Use langid for language detection
+                lang, _ = langid.classify(combined_text)
+                return lang
+            except Exception as e:
+                print(f"Error detecting language: {e}")
+                return 'en'  # Default to English if detection fails
+        return 'en'  # Default to English if no text is available
+
+    def process_image(self, image_data, doc_language):
+        if isinstance(image_data, bytes):
+            image_data = base64.b64encode(image_data).decode('utf-8')
+
         try:
-            # Convert WMF data to a Wand image object
-            with WandImage(blob=wmf_data) as img:
-                # Convert to JPEG (or PNG, depending on your needs)
-                with io.BytesIO() as output:
-                    img.format = 'jpeg'  # Set output format to JPEG
-                    img.save(file=output)
-                    return output.getvalue()
-        except Exception as e:
-            print(f"Error converting WMF image: {e}")
-            return None
-    
-    def process_image(self, image_data):
-        try:            
             # Prepare the body for the model invocation
             body = json.dumps(
                 {
@@ -314,7 +317,7 @@ class MsPowerpointDocumentBackend(DeclarativeDocumentBackend, PaginatedDocumentB
                                 },
                                 {
                                     "type": "text",
-                                    "text": "Provide a clear and detailed description of the contents of the image. Pay particular attention to graphs."
+                                    "text": f"Provide a clear and detailed description of the contents of the image. The language of the provided description should be {doc_language}"
                                 },
                             ],
                         }
@@ -337,16 +340,6 @@ class MsPowerpointDocumentBackend(DeclarativeDocumentBackend, PaginatedDocumentB
             print(f"Error in generate_image_description: {e}")
 
 
-    def process_image_concurrently(self, image_data):
-        # Ensure image_data is bytes
-        if isinstance(image_data, bytes):
-            img_base64 = base64.b64encode(image_data).decode('utf-8')
-            description = self.process_image(img_base64)
-            return description
-        else:
-            print(f"Error: Image data is not in byte format, type is {type(image_data)}.")
-            return None
-
     def handle_pictures(self, shape, parent_slide, slide_ind, doc):
         default_bbox = BoundingBox(l=0, t=0, r=100, b=100)
 
@@ -357,6 +350,10 @@ class MsPowerpointDocumentBackend(DeclarativeDocumentBackend, PaginatedDocumentB
         # Extract image data
         image_data = shape.image.blob
         image_format = shape.image.ext
+
+        # Detect document language
+        doc_language = self.detect_language(doc)
+        print(f"Detected document language: {doc_language}")
 
         # Convert to JPEG if not already in JPEG format
         if image_format.lower() != "jpeg":
@@ -370,50 +367,41 @@ class MsPowerpointDocumentBackend(DeclarativeDocumentBackend, PaginatedDocumentB
             except Exception as e:
                 print(f"Error converting image to JPEG: {e}")
 
-        # Create a ThreadPoolExecutor to process images concurrently
-        with ThreadPoolExecutor(max_workers=25) as executor:
-            futures = []
-            
-            # Submit the image processing task to the executor
-            future = executor.submit(self.process_image_concurrently, image_data)
-            futures.append(future)
+        # Process the image and get the description synchronously
+        description = self.process_image(image_data, doc_language)
 
-            # Process results as tasks complete
-            for future in as_completed(futures):
-                description = future.result()
+        # Interleave the description into the slide group
+        if description:
+            slide_number = slide_ind
+            if slide_number < len(doc.groups):
+                slide_group = doc.groups[slide_number]
 
-                # Interleave the description into the slide group
-                if description:
-                    slide_number = slide_ind
-                    if slide_number < len(doc.groups):
-                        slide_group = doc.groups[slide_number]
+                # Generate a unique text_id for the new description
+                text_id = len(doc.texts)
 
-                        # Generate a unique text_id for the new description
-                        text_id = len(doc.texts)
+                # Create the self_ref for the new description
+                self_ref = f"#/texts/{text_id}"
 
-                        # Create the self_ref for the new description
-                        self_ref = f"#/texts/{text_id}"
+                # Create a parent_ref pointing to the corresponding slide group
+                parent_ref = RefItem(cref=f"#/groups/{slide_number}")
 
-                        # Create a parent_ref pointing to the corresponding slide group
-                        parent_ref = RefItem(cref=f"#/groups/{slide_number}")
+                # Create the new TextItem with the description
+                new_text_item = TextItem(
+                    self_ref=self_ref,
+                    parent=parent_ref,
+                    label="paragraph",
+                    prov=[ProvenanceItem(page_no=slide_number, bbox=default_bbox, coord_origin=None, charspan=(0, len(description)))],
+                    orig=description,
+                    text=description,
+                )
 
-                        # Create the new TextItem with the description
-                        new_text_item = TextItem(
-                            self_ref=self_ref,
-                            parent=parent_ref,
-                            label="paragraph",
-                            prov=[ProvenanceItem(page_no=slide_number, bbox=default_bbox, coord_origin=None, charspan=(0, len(description)))],
-                            orig=description,
-                            text=description,
-                        )
+                # Append the new TextItem to the 'texts' list in the document
+                doc.texts.append(new_text_item)
 
-                        # Append the new TextItem to the 'texts' list in the document
-                        doc.texts.append(new_text_item)
-
-                        # Add a RefItem to the slide group's children for this new text
-                        slide_group.children.append(RefItem(cref=self_ref))
-                    else:
-                        print(f"Slide number {slide_number} is out of bounds.")
+                # Add a RefItem to the slide group's children for this new text
+                slide_group.children.append(RefItem(cref=self_ref))
+            else:
+                print(f"Slide number {slide_number} is out of bounds.")
 
 
     def handle_tables(self, shape, parent_slide, slide_ind, doc):
@@ -479,63 +467,47 @@ class MsPowerpointDocumentBackend(DeclarativeDocumentBackend, PaginatedDocumentB
                 # Create Docling table
                 doc.add_table(parent=parent_slide, data=data, prov=prov)
         return
+    
+    def process_slide(self, slide, slide_ind, doc, slide_width, slide_height):
+        """Processes a single slide, handling tables, pictures, and text."""
+        parent_slide = doc.add_group(
+            name=f"slide-{slide_ind}", label=GroupLabel.CHAPTER, parent=None
+        )
+
+        size = Size(width=slide_width, height=slide_height)
+        parent_page = doc.add_page(page_no=slide_ind + 1, size=size)
+
+        for shape in slide.shapes:
+            # Handle tables
+            if shape.has_table:
+                self.handle_tables(shape, parent_slide, slide_ind, doc)
+
+            # Handle pictures (images)
+            if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
+                self.handle_pictures(shape, parent_slide, slide_ind, doc)
+
+            # Handle text elements (e.g., paragraphs, titles)
+            if hasattr(shape, "text") and shape.text and shape.text.strip() and shape.has_text_frame:
+                self.handle_text_elements(shape, parent_slide, slide_ind, doc)
 
     def walk_linear(self, pptx_obj, doc) -> DoclingDocument:
-        # Units of size in PPTX by default are EMU units (English Metric Units)
+        """Processes a PowerPoint document and converts it into a DoclingDocument."""
         slide_width = pptx_obj.slide_width
         slide_height = pptx_obj.slide_height
 
-        text_content = []  # type: ignore
-
-        max_levels = 10
-        parents = {}  # type: ignore
-        for i in range(0, max_levels):
-            parents[i] = None
-
-        # Loop through each slide
+        # List of slides to process
+        slides_to_process = []
         for slide_num, slide in enumerate(pptx_obj.slides):
-            slide_ind = pptx_obj.slides.index(slide)
-            parent_slide = doc.add_group(
-                name=f"slide-{slide_ind}", label=GroupLabel.CHAPTER, parent=parents[0]
-            )
+            slides_to_process.append((slide, slide_num))
 
-            size = Size(width=slide_width, height=slide_height)
-            parent_page = doc.add_page(page_no=slide_ind + 1, size=size)
-            # parent_page = doc.add_page(page_no=slide_ind, size=size, hash=hash)
+        # Create a ThreadPoolExecutor to process slides concurrently
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = []
+            for slide, slide_ind in slides_to_process:
+                futures.append(executor.submit(self.process_slide, slide, slide_ind, doc, slide_width, slide_height))
 
-            # Loop through each shape in the slide
-            for shape in slide.shapes:
-
-                if shape.has_table:
-                    # Handle Tables
-                    self.handle_tables(shape, parent_slide, slide_ind, doc)
-
-                if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
-                    # Handle Tables
-                    self.handle_pictures(shape, parent_slide, slide_ind, doc)
-
-                # If shape doesn't have any text, move on to the next shape
-                if not hasattr(shape, "text"):
-                    continue
-                if shape.text is None:
-                    continue
-                if len(shape.text.strip()) == 0:
-                    continue
-                if not shape.has_text_frame:
-                    _log.warn("Warning: shape has text but not text_frame")
-                    continue
-
-                # if shape.is_placeholder:
-                # Handle Titles (Headers) and Subtitles
-                # Check if the shape is a placeholder (titles are placeholders)
-                # self.handle_title(shape, parent_slide, slide_ind, doc)
-                # self.handle_text_elements(shape, parent_slide, slide_ind, doc)
-                # else:
-
-                # Handle other text elements, including lists (bullet lists, numbered lists)
-                self.handle_text_elements(shape, parent_slide, slide_ind, doc)
-
-                # figures...
-                # doc.add_figure(data=BaseFigureData(), parent=self.parents[self.level], caption=None)
+            # Process results as tasks complete
+            for future in as_completed(futures):
+                future.result()  # This will raise an exception if any slide processing fails
 
         return doc

@@ -99,6 +99,9 @@ from chatbot import Chatbot
 from headers import run_pip_installations
 import streamlit as st
 from docling_converter import DoclingFileLoader
+from pptx import Presentation
+import fitz 
+import concurrent.futures
 
 
 class PreProcessor:
@@ -185,72 +188,6 @@ class PreProcessor:
         runner.run()
         print("Document ingestion completed. Output saved in:", self.output_path)
         return self.output_path
-
-
-    def get_image_block_types(self, file_elements, docs):
-        '''with open(input_json_file_path, 'r') as file:
-            file_elements = json.load(file)'''
-        tables = []
-        for element in file_elements:
-            # Ensure metadata is in dictionary format or accessible with getattr
-            if element.category != "Table":
-                metadata = element.metadata
-                # Process image if 'image_base64' key exists
-
-                if "image_base64" in metadata or element.category == "Image":
-                    image_data = base64.b64decode(metadata["image_base64"])
-                    image = Image.open(io.BytesIO(image_data))
-                    text_from_image = pytesseract.image_to_string(image)
-
-                    doc = Document(
-                        page_content=text_from_image,
-                        metadata=metadata,
-                        id=str(uuid4())
-                    )
-                    docs.append(doc)
-                if hasattr(metadata, "to_dict"):
-                    metadata = metadata.to_dict()
-                elif not isinstance(metadata, dict):
-                    continue  # Skip element if metadata cannot be processed
-
-  
-
-            # Filter out table elements
-            else:
-                # Extract table content row-by-row
-                
-                #table_content = self.extract_table_data(element)
-                print(element)
-                tables.append(element)
-
-        #print(tables[0].text)
-        #print(tables[0].metadata.text_as_html)
-        # Add the table content to Document with metadata
-        for i, cont in enumerate(tables):
-            # Extract text content for page_content
-            page_content = tables[i].text
-
-            # Extract and format metadata as a dictionary
-            if hasattr(tables[i].metadata, 'to_dict'):
-                metadata = tables[i].metadata.to_dict()  # Convert to dictionary if possible
-            else:
-                # If there's no conversion method, create a dictionary manually
-                metadata = {
-                    'source': 'unknown',  # Default source if not available
-                    'content': tables[i].metadata.text_as_html  # You can adjust what you want to keep
-                }
-
-            # Create Document instance with proper metadata
-            doc = Document(
-                page_content=page_content,
-                metadata=metadata,  # Ensure this is a dictionary
-                id=str(uuid4())
-            )
-            docs.append(doc)
-
-
-        return docs
-    
 
 
     def process_table_text(self, text):
@@ -420,18 +357,17 @@ class PreProcessor:
                 # If it's neither a file nor a directory, raise an error or handle it accordingly
                 raise ValueError(f"The path {file_path} is neither a valid directory nor a file.")
 
-
     def process_pptx_data(self, pptx_elements=None):
-        # Create Document instances
         file_list = self.get_files_from_directory(os.path.join(os.getcwd(), 'files'))
 
         loader = DoclingFileLoader(file_path=self._file_paths)
 
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=200, add_start_index=True)
         docs = loader.load()
+
         splits = text_splitter.split_documents(docs)
         
-        return splits #final_documents
+        return splits
 
     # Main function to tie everything together
     def process_directory(self, elements=None, query=None, max_tokens=1000):
@@ -505,14 +441,14 @@ class PreProcessor:
 
 
 if __name__ == "__main__":
-    st.title("TERNA Chatbot")
+    st.markdown("<h1 style='text-align: center;'>TERNA Chatbot</h1>", unsafe_allow_html=True)
     # Display chat history in the sidebar
     placeholder = st.empty()
     if 'chat_history' not in st.session_state:
         st.session_state['chat_history'] = []
     if 'context_history' not in st.session_state:
         st.session_state['context_history'] = []
-    processor = PreProcessor("./chroma_langchain_db", "amazon.titan-embed-text-v2:0", "eu.meta.llama3-2-1b-instruct-v1:0", "./unstructured-output/")
+    processor = PreProcessor("./chroma_langchain_db", "amazon.titan-embed-text-v2:0", "anthropic.claude-3-5-sonnet-20240620-v1:0", "./unstructured-output/")
     if not os.path.exists(processor.persist_directory) or len(os.listdir(processor.persist_directory)) <= 1:
         placeholder.write("Processing documents...")
        
