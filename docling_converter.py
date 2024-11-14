@@ -10,6 +10,7 @@ from io import BytesIO
 import json
 import langid
 import boto3
+from pptx import Presentation
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from dotenv import load_dotenv
@@ -28,7 +29,7 @@ from docling.pipeline.simple_pipeline import SimplePipeline
 from docling.pipeline.standard_pdf_pipeline import StandardPdfPipeline
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
-from mspowerpoint_backend import MsPowerpointDocumentBackend
+from docling.backend.mspowerpoint_backend import MsPowerpointDocumentBackend
 from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
 from docling.models.tesseract_ocr_model import TesseractOcrOptions
 from docling_core.types.doc import RefItem, TextItem, BoundingBox
@@ -131,6 +132,51 @@ class DoclingFileLoader(BaseLoader):
             print(f"Error in generate_image_description: {e}")
 
 
+    def process_pptx_page_images(self, dlc_doc, pptx_path) -> None:
+        """Process the images of figures and tables from a PPTX document and collect image data concurrently."""
+        figure_images = []  # To store images of figures and their slide numbers
+
+        # Load the presentation
+        prs = Presentation(pptx_path)
+
+        # Loop through slides and extract images
+        for slide_ind, slide in enumerate(prs.slides):
+            for shape in slide.shapes:
+                if shape.shape_type == 13:  # Type 13 corresponds to Picture shapes
+                    # Extract image data (use .image for images)
+                    img_stream = shape.image
+                    img_format = img_stream.ext  # Format of the image (e.g., 'jpeg', 'png')
+                    img_data = img_stream.blob  # Raw image data
+                    img_base64 = base64.b64encode(img_data).decode('utf-8')  # Base64 encode the image
+
+                    # Store the base64 image data along with the slide number (page number equivalent)
+                    figure_images.append((slide_ind + 1, img_base64))  # slide_ind + 1 to make it 1-indexed
+
+        # Initialize ThreadPoolExecutor for concurrent processing
+        doc_language = self.detect_language(dlc_doc)  # Assuming you have a method to detect language
+        descriptions = {}
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {}
+
+            # Submit the image processing tasks concurrently
+            for page_no, img_base64 in figure_images:
+                futures[executor.submit(self.process_image, img_base64, doc_language)] = page_no
+
+            # Process the results as tasks complete
+            for future in as_completed(futures):
+                try:
+                    description = future.result()
+                    page_no = futures[future]
+
+                    if description:
+                        descriptions[page_no] = description
+                except Exception as e:
+                    print(f"Error processing image: {e}")
+
+        # Interleave descriptions into the document at the correct figure locations
+        self.interleave_descriptions(dlc_doc, descriptions)  
+
+
     def process_pdf_page_images(self, dl_doc) -> None:
         """Process the images of figures and tables from the document and collect image data concurrently."""
         figure_images = []  # To store images of tables and figures
@@ -230,7 +276,13 @@ class DoclingFileLoader(BaseLoader):
                 try:
                     print(f"Processing {source}")
                     dl_doc = self.doc_converter.convert(source).document
-                    self.process_pdf_page_images(dl_doc)
+                    # Check if the document is a PDF before processing images
+                    if source.lower().endswith('.pdf'):
+                        print("Processing PDF page images...")
+                        self.process_pdf_page_images(dl_doc)
+                    elif source.lower().endswith('.pptx'):
+                        print("Processing PPTX page images...")
+                        self.process_pptx_page_images(dl_doc, source)
                     
                     # Write the structure of the DoclingDocument to the output file
                     output_file.write(f"Docling Document structure for {source}:\n")
