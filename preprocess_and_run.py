@@ -454,38 +454,12 @@ if __name__ == "__main__":
        
         processor.process_directory()
         placeholder.empty()
-          # Create a button in the app
-        if st.button("Process Documents"):
-            # Call the processing function when the button is clicked
-            placeholder.write("Processing documents...")
-            processor.process_directory()
-        placeholder.empty()
-        if st.button("Clear Chat History"):
-            st.session_state['chat_history'].clear()
-            st.session_state['context_history'].clear()
-        if st.button("Shut Down App"):
-            st.warning("Shutting down the app...")
-            processor.shutdown_app()
         chatbot = Chatbot(os.getcwd(), processor, query=None)
         #have to separate it from the loading process
         chatbot.process_answer(st)
 
             
     else:
-  
-        # Create a button in the app
-        if st.button("Process Documents"):
-            # Call the processing function when the button is clicked
-            placeholder.write("Processing documents...")
-            processor.delete_directory_contents(processor.persist_directory)
-            processor.process_directory()
-        placeholder.empty()
-        if st.button("Clear Chat History"):
-            st.session_state['chat_history'].clear()
-            st.session_state['context_history'].clear()
-        if st.button("Shut Down App"):
-            st.warning("Shutting down the app...")
-            processor.shutdown_app()
         chatbot = Chatbot(os.getcwd(), processor, query=None)
         #have to separate it from the loading process
         chatbot.process_answer(st)
