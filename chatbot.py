@@ -88,7 +88,8 @@ import nltk
 import subprocess
 import getpass
 import streamlit as st
-# Unstructured processing function to ingest documents
+from dotenv import load_dotenv
+from transformers import GPT2TokenizerFast
 
 
 
@@ -274,11 +275,30 @@ class Chatbot:
         # Step 2: Set up the retriever for the vector store
         retriever = vectorstore.as_retriever(
             search_type="similarity",
-            search_kwargs={"k": 5}
+            search_kwargs={"k": 100}
         )
         
-        def format_docs(docs: Iterable[Document]):
-            return "\n\n".join(doc.page_content for doc in docs)
+        def format_docs(docs: Iterable[Document]) -> str:
+            """Format documents into a string, ensuring we don't exceed the token limit using the local tokenizer."""
+            tokenizer = GPT2TokenizerFast.from_pretrained('Xenova/claude-tokenizer')
+            context = ""
+            total_tokens = 0
+            token_limit = 8000
+
+            for doc in docs:
+                # Tokenize the content of the document
+                tokens = tokenizer.encode(doc.page_content)
+                doc_tokens = len(tokens)
+
+                # If adding this document's tokens would exceed the limit, stop
+                if total_tokens + doc_tokens <= token_limit:
+                    context += doc.page_content + "\n\n"
+                    total_tokens += doc_tokens
+                else:
+                    break
+                
+            print(total_tokens)
+            return context
 
         # Step 4: Define the system prompt with the retrieved context
         template = """You are a specialized assistant who provides information and solutions based exclusively on the database and available support documents."""

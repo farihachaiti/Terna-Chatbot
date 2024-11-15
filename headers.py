@@ -31,7 +31,8 @@ def run_pip_installations():
         "boto3",
         "json",
         "langchain-aws",
-        "langid"
+        "langid",
+        "python-dotenv"
     ]
 
     # Run pip commands to install each package

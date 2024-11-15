@@ -176,7 +176,7 @@ class DoclingFileLoader(BaseLoader):
         # Interleave descriptions into the document at the correct figure locations
         self.interleave_descriptions(dlc_doc, descriptions)  
 
-
+    # try replacing it with a different PDF image extraction library
     def process_pdf_page_images(self, dl_doc) -> None:
         """Process the images of figures and tables from the document and collect image data concurrently."""
         figure_images = []  # To store images of tables and figures
