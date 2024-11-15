@@ -283,7 +283,7 @@ class Chatbot:
             tokenizer = GPT2TokenizerFast.from_pretrained('Xenova/claude-tokenizer')
             context = ""
             total_tokens = 0
-            token_limit = 8000
+            token_limit = 8192
 
             for doc in docs:
                 # Tokenize the content of the document
@@ -296,7 +296,7 @@ class Chatbot:
                     total_tokens += doc_tokens
                 else:
                     break
-                
+
             print(total_tokens)
             return context
 
@@ -308,6 +308,15 @@ class Chatbot:
         #custom_rag_prompt = PromptTemplate.from_template(template)
         st.session_state['chat_history'].append(("You", question))
 
+        # Get the last 5 relevant bot responses from the chat history
+        recent_bot_responses = [message for speaker, message in reversed(st.session_state['chat_history']) if speaker == "Bot"][:5]
+
+        # Step 1: Rephrase the question using the last 5 bot responses
+        if recent_bot_responses:
+            rephrase_prompt = f"Rephrase the following question in the context of these recent answers: {', '.join(recent_bot_responses)}. User's question: {question}"
+            rephrased_question = self.processor.llm.invoke(rephrase_prompt)
+        else:
+            rephrased_question = question
 
         rag_chain = (
             {"context": retriever | format_docs, "input": RunnablePassthrough()}
@@ -333,7 +342,6 @@ class Chatbot:
         - End the response after providing an answer to the question or stating the impossibility of responding.
         3. In Case of Lack of Information:
         - If you cannot find relevant information or similar components, clearly state that you cannot provide an answer to the question.
-        - If relevant, use the contents of {chat_history} to answer the user's question.
 
         These are the contents you must use to respond to user questions: {context}
         """
@@ -354,20 +362,13 @@ class Chatbot:
         @retry_with_exponential_backoff  # Add retry to chain invocation
         def get_response(input_data):
             return rag_chain.invoke(input_data)
-        
-        # Check if there are at least two items in chat_history
-        if len(st.session_state['context_history']) >= 1:
-            last_two_messages = st.session_state['context_history'][-1:]
-        else:
-            # If there are fewer than two items, just return the available items (or handle as needed)
-            last_two_messages = []
 
         response = get_response({
-            "input": question,            
+            "input": rephrased_question,            
             "context": history_aware_retriever, 
             "maxTokens": 1024,   
             "temperature": 0.5,
-            "chat_history": last_two_messages,      
+            "chat_history": recent_bot_responses,      
             })
         st.info(f"You: {question}")
         resp = "Bot: "
