@@ -4,6 +4,7 @@ import os
 warnings.filterwarnings('ignore')
 import signal
 import shutil
+from dotenv import load_dotenv
 ##
 
 
@@ -18,7 +19,7 @@ from langchain_aws import ChatBedrock
 import boto3
 import json
 # Pre-process the pdf file
-os.environ['USER_AGENT'] = 'TERNAbot/1.0'
+os.environ['USER_AGENT'] = os.getenv("USER_AGENT")
 import multiprocessing
 from multiprocessing import Pool
 from pathlib import Path
@@ -99,7 +100,7 @@ from chatbot import Chatbot
 from headers import run_pip_installations
 import streamlit as st
 from docling_converter import DoclingFileLoader
-
+load_dotenv()
 
 class PreProcessor:
 
@@ -130,13 +131,13 @@ class PreProcessor:
         self.embeddings = BedrockEmbeddings(
                 client=self.bedrock_client, model_id=emb)
 
-        os.environ["LANGCHAIN_TRACING_V2"]="true"
-        os.environ["LANGCHAIN_ENDPOINT"]="https://api.smith.langchain.com"
-        os.environ["LANGCHAIN_API_KEY"]="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"
-        os.environ["LANGCHAIN_PROJECT"]="TERNA-chatbot"
+        os.environ["LANGCHAIN_TRACING_V2"]=os.getenv("LANGCHAIN_TRACING_V2")
+        os.environ["LANGCHAIN_ENDPOINT"]=os.getenv("LANGCHAIN_ENDPOINT")
+        os.environ["LANGCHAIN_API_KEY"]=os.getenv("LANGCHAIN_API_KEY")
+        os.environ["LANGCHAIN_PROJECT"]=os.getenv("LANGCHAIN_PROJECT")
 
 
-        os.environ["OPENAI_API_KEY"] = "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"
+        os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
 
 
         # Set-up Unstructured API credentials

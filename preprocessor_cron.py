@@ -12,11 +12,13 @@ from watchdog.events import FileSystemEventHandler
 import os
 # Warning control
 import warnings
-import os
+import requests
 warnings.filterwarnings('ignore')
 import signal
 ##
-
+import os
+import requests
+import re
 
 ##
 import chromadb
@@ -28,7 +30,7 @@ from langchain_aws import ChatBedrock
 import boto3
 import json
 # Pre-process the pdf file
-os.environ['USER_AGENT'] = 'TERNAbot/1.0'
+
 import multiprocessing
 from multiprocessing import Pool
 from pathlib import Path
@@ -67,7 +69,9 @@ from unstructured_ingest.runner import LocalRunner
 from unstructured.documents.elements import Title, Text, NarrativeText, Table, ListItem, Image
 from unstructured.staging.base import elements_from_json
 import logging
-
+import requests
+import os
+from datetime import datetime, timedelta, timezone  # Make sure timezone is imported
 
 import numpy as np
 import openai
@@ -109,74 +113,178 @@ from chatbot import Chatbot
 from headers import run_pip_installations
 import streamlit as st
 from preprocess_and_run import PreProcessor
+import msal
 
+from dotenv import load_dotenv
+load_dotenv()
 
+os.environ['USER_AGENT'] = os.getenv("USER_AGENT")
 # Microsoft Graph API credentials
-client_id = "YOUR_CLIENT_ID"
-client_secret = "YOUR_CLIENT_SECRET"
-tenant_id = "YOUR_TENANT_ID"
 
-# OneDrive settings (for personal OneDrive)
-resource = "/me/drive/root"
+# Split SCOPES into a list
+scopes = os.getenv("SCOPES", "").split(",")  # Split by comma
+scopes = [scope.strip() for scope in scopes]  # Remove any extra whitespace
 
-# FastAPI setup
-app = FastAPI()
+# Validate and use the scopes list
+if not isinstance(scopes, list) or not all(isinstance(s, str) for s in scopes):
+    raise ValueError("SCOPES must be a list of strings.")
+
+
 logging.basicConfig(level=logging.INFO)
 
 # Get OAuth2 token from Azure AD
 def get_access_token():
-    url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
-    body = {
-        "client_id": client_id,
-        "scope": "https://graph.microsoft.com/.default",
-        "client_secret": client_secret,
-        "grant_type": "client_credentials"
-    }
-    response = requests.post(url, headers=headers, data=body)
-    return response.json().get("access_token")
 
-# Create subscription for OneDrive file changes
-@app.post("/create-webhook")
-def create_subscription():
-    token = get_access_token()
-    url = "https://graph.microsoft.com/v1.0/subscriptions"
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    expiration_time = (datetime.utcnow() + timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    app = msal.PublicClientApplication(
+        os.getenv("CLIENT_ID"),
+        authority=os.getenv("AUTHORITY"),
+    )
 
-    body = {
+    result = app.acquire_token_interactive(scopes=scopes)
+    print(result)
+    if "access_token" in result:
+        access_token = result["access_token"]
+    else:
+        print(result.get("error"))
+
+    return access_token
+ 
+
+
+# Create a subscription
+def create_subscription(access_token):
+    url = f"{os.getenv("SITE_URL")}/subscriptions"
+    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+    data = {
         "changeType": "updated",
-        "notificationUrl": "https://your-webhook-url.com/api/notify",
-        "resource": resource,
-        "expirationDateTime": expiration_time,
-        "clientState": "secretValue"
+        "notificationUrl": "https://contoso.azurewebsites.net/api/webhook-receiver",
+        "resource": "/me/drive/root",
+        "expirationDateTime": "2018-01-01T11:23:00.000Z",
+        "clientState": "client-specific string"
     }
-
-    response = requests.post(url, headers=headers, json=body)
-    return response.json() if response.ok else {"error": response.text}
+    response = requests.post(url, headers=headers, json=data)
+    if response.status_code == 201:
+        return response.json()
+    else:
+        print(f"Failed to create subscription: {response.status_code}, {response.text}")
+        return None
 
 # Webhook endpoint for receiving OneDrive notifications
-@app.post("/webhook")
-async def receive_webhook(request: Request):
-    payload = await request.json()
-    logging.info("Received webhook: %s", json.dumps(payload, indent=2))
+import requests
+import os
+from datetime import datetime, timedelta
 
-    for notification in payload.get("value", []):
-        file_info = notification.get("resourceData", {})
-        item_id = file_info.get("id")
-        file_name = file_info.get("name")
-        web_url = file_info.get("webUrl")
-        logging.info(f"File Changed: ID={item_id}, Name={file_name}, URL={web_url}")
+def get_changes(access_token):
+    # Delta query URL for the SharePoint site
+    url = f"https://graph.microsoft.com/v1.0/sites/{os.getenv('SITE_ID')}/drive/root/delta"
+    
+    # Headers for authorization
+    headers = {"Authorization": f"Bearer {access_token}"}
+    
+    # Initialize variables to hold the file IDs and deleted items
+    fileIDs = []
+    deleted = []
 
-    return {"status": "success"}
+    # Set the threshold date (3 days ago for example) and make it UTC-aware
+    three_days_ago = datetime.utcnow().replace(tzinfo=timezone.utc) - timedelta(days=1)
+
+    # Start the delta query to get changes
+    response = requests.get(url, headers=headers)
+    
+    if response.status_code == 200:
+        print("Response status:", response.status_code)
+        print("Response headers:", response.headers)
+        print("Response content:", response.text)
+
+        changes = response.json()
+
+        # Process the changes in the first page
+        for item in changes.get("value", []):
+            # Check if the change is for a file and not deleted
+            if "file" in item and "deleted" not in item:
+                # Convert 'lastModifiedDateTime' to an aware datetime object (UTC)
+                last_modified = datetime.fromisoformat(item["lastModifiedDateTime"]).astimezone(timezone.utc)
+                
+                # Filter by modified date (only include files modified in the last 3 days)
+                if last_modified >= three_days_ago:
+                    print(f"File changed or added: {item['name']} (ID: {item['id']})")
+                    fileIDs.append(item['id'])  # Add the file ID to the list
+            elif "deleted" in item:  # Skip deleted files
+                print(f"File deleted (skipped): {item}")
+                deleted.append(item)  # You can track deleted files if needed
+
+        # Store the deltaLink for incremental queries
+        delta_link = changes.get("@odata.deltaLink")
+        if delta_link:
+            print("deltaLink:", delta_link)
+        
+        # Handle pagination if there are more changes to fetch
+        while "@odata.nextLink" in changes:
+            next_url = changes["@odata.nextLink"]
+            response = requests.get(next_url, headers=headers)
+            if response.status_code != 200:
+                print(f"Error fetching next page: {response.status_code}, {response.text}")
+                return None
+
+            changes = response.json()
+
+            # Process the changes in the next page
+            for item in changes.get("value", []):
+                # Check if the change is for a file and not deleted
+                if "file" in item and "deleted" not in item:
+                    # Convert 'lastModifiedDateTime' to an aware datetime object (UTC)
+                    last_modified = datetime.fromisoformat(item["lastModifiedDateTime"]).astimezone(timezone.utc)
+                    
+                    # Filter by modified date (only include files modified in the last 3 days)
+                    if last_modified >= three_days_ago:
+                        print(f"File changed or added: {item['name']} (ID: {item['id']})")
+                        fileIDs.append(item['id'])  # Add the file ID
+                elif "deleted" in item:
+                    print(f"File deleted (skipped): {item}")
+                    deleted.append(item)  # You can track deleted files if needed
+
+        # Print final list of changed or added file IDs
+        print("Changed or added file IDs:", fileIDs)
+        return fileIDs, delta_link  # Return both file IDs and deltaLink
+
+    else:
+        print(f"Error fetching changes: {response.status_code}, {response.text}")
+        return None, None
+
+
+
+def download_changed_file(access_token, fileIDs):
+    for fileID in fileIDs:
+        url = f"https://graph.microsoft.com/v1.0/sites/{os.getenv('SITE_ID')}/drive/items/{fileID}/content"
+        headers = {"Authorization": f"Bearer {access_token}"}
+        response = requests.get(url, headers=headers, stream=True)
+
+        if response.status_code == 200:
+            # Extract the filename from the Content-Disposition header
+            content_disposition = response.headers.get("Content-Disposition", "")
+            filename = content_disposition.split("filename=")[-1] if "filename=" in content_disposition else f"{fileID}.file"
+
+            # Clean the filename to remove any invalid characters
+            filename = filename.replace('"', '').strip()  # Remove quotes and extra spaces
+
+            # Optional: Further clean the filename by removing or replacing other invalid characters (for Windows systems)
+            filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
+
+            # Save the file locally
+            with open(filename, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            print(f"File downloaded: {filename}")
+        else:
+            print(f"Error downloading file: {response.status_code}, {response.text}")
+
+
 
 def delete_from_vectorstore(file_paths):
     processor.delete_from_vectorstore(file_paths)
-        
+       
 
-
-
-def delete_unstructured_output(file_path):
+def delete_locally(file_path):
     # Convert file path to corresponding unstructured file path
     file_name = os.path.basename(file_path)  
     unstructured_file = f"{processor.output_path}/{file_name}.json"
@@ -205,7 +313,7 @@ class ChangeHandler(FileSystemEventHandler):
     def on_deleted(self, event):
         print(f"File deleted: {event.src_path}")
         delete_from_vectorstore(event.src_path)
-        delete_unstructured_output(event.src_path)
+        delete_locally(event.src_path)
 
 
 def process_file(file_path, processor):
@@ -222,25 +330,35 @@ def process_file(file_path, processor):
 if __name__ == "__main__":
     processor = PreProcessor("./chroma_langchain_db", "amazon.titan-embed-text-v2:0", "eu.meta.llama3-2-1b-instruct-v1:0", "./unstructured-output/")
     if not os.path.exists(processor.persist_directory) or len(os.listdir(processor.persist_directory)) <= 1:     
-            processor.delete_directory_contents(processor.persist_directory)
+            #processor.delete_directory_contents(processor.persist_directory)
             processor.process_directory()
 
-    path = os.path.join(os.getcwd(), 'files') # Replace with your directory path
+    '''path = os.path.join(os.getcwd(), 'files') # Replace with your directory path
     event_handler = ChangeHandler(processor)
     observer = Observer()
     observer.schedule(event_handler, path, recursive=True)
-    observer.start()
+    observer.start()'''
+
 
 
     try:
-        print("Press 'Esc' to stop monitoring...")
-        while True:
+        access_token = get_access_token()
+        print(access_token)
+        if access_token:
+            fileIDs, delta_link = get_changes(access_token)
+            
+            if fileIDs:
+                print(fileIDs)
+                download_changed_file(access_token, fileIDs)
+            else:
+                print('ERROR!!!')
+            '''while True:
             if keyboard.is_pressed('esc'):  # Check if the Esc key is pressed
                 print("Stopping observer...")
                 break
-            time.sleep(1)
+            time.sleep(1)'''
     except Exception as e:
         print(f"Error: {e}")
-    finally:
-        observer.stop()
-        observer.join()
+    #finally:
+        #observer.stop()
+        #observer.join()
