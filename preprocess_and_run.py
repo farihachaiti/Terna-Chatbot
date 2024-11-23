@@ -98,7 +98,43 @@ import getpass
 from chatbot import Chatbot
 from headers import run_pip_installations
 import streamlit as st
-from docling_converter import DoclingFileLoader
+#from docling_converter import DoclingFileLoader
+
+import os
+from supabase import create_client, Client
+import streamlit as st
+from preprocess_and_run import PreProcessor  # Assuming PreProcessor is in preprocess_and_run.py
+
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+
+# Initialize Supabase client
+SUPABASE_URL = os.getenv('SUPABASE_URL')
+SUPABASE_KEY = os.getenv('SUPABASE_KEY')
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+def register_user(email, password):
+    response = supabase.auth.sign_up(email=email, password=password)
+    return response
+
+def login_user(email, password):
+    response = supabase.auth.sign_in(email=email, password=password)
+    return response
+
+def save_chat_history(user_id, chat_history):
+    data = {
+        "user_id": user_id,
+        "chat_history": chat_history
+    }
+    response = supabase.table('chat_history').insert(data).execute()
+    return response
+
+def load_chat_history(user_id):
+    response = supabase.table('chat_history').select('*').eq('user_id', user_id).execute()
+    return response.data
 
 
 class PreProcessor:
@@ -151,7 +187,7 @@ class PreProcessor:
 
         # Run the Hugging Face login command using the provided token
         try:
-            subprocess.run(f"echo {hf_token} | huggingface-cli login", shell=True, check=True)
+            subprocess.run(f"echo {hf_token} | huggingface-cli login", shell=False, check=True)
             print("Successfully logged into Hugging Face!")
         except subprocess.CalledProcessError as e:
             print(f"Error during Hugging Face login: {e}")
@@ -175,7 +211,7 @@ class PreProcessor:
             read_config=ReadConfig(),
             partition_config=PartitionConfig(
                 partition_by_api=False,
-                api_key="DTjTEIvxCqK1WpEXkMUco5dc4lqGTp",
+                api_key=os.getenv("UNSTRUCTURED_API_KEY"),
                 strategy="hi_res",
                 ),
             connector_config=SimpleLocalConfig(input_path=directory_path, recursive=False,),
@@ -199,8 +235,8 @@ class PreProcessor:
 
                 if "image_base64" in metadata or element.category == "Image":
                     image_data = base64.b64decode(metadata["image_base64"])
-                    image = Image.open(io.BytesIO(image_data))
-                    text_from_image = pytesseract.image_to_string(image)
+                    with Image.open(io.BytesIO(image_data)) as image:
+                        text_from_image = pytesseract.image_to_string(image)
 
                     doc = Document(
                         page_content=text_from_image,
@@ -415,23 +451,27 @@ class PreProcessor:
             elif directory_path.is_file():
                 # If it's a valid file, treat it as a single file path
                 self._file_paths = [str(directory_path)]
-
             else:
-                # If it's neither a file nor a directory, raise an error or handle it accordingly
-                raise ValueError(f"The path {file_path} is neither a valid directory nor a file.")
-
+                # If it's neither a file nor a directory, handle it accordingly
+                print(f"The path {file_path} is neither a valid directory nor a file.")
+                self._file_paths = []
 
     def process_pptx_data(self, pptx_elements=None):
         # Create Document instances
         file_list = self.get_files_from_directory(os.path.join(os.getcwd(), 'files'))
 
-        loader = DoclingFileLoader(file_path=self._file_paths)
+        # Comment out or remove the loader line
+        # loader = DoclingFileLoader(file_path=self._file_paths)
 
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=200, add_start_index=True)
-        docs = loader.load()
+        
+        # Replace loader.load() with an alternative method to load documents
+        # docs = loader.load()
+        docs = []  # Placeholder for document loading logic
+
         splits = text_splitter.split_documents(docs)
         
-        return splits #final_documents
+        return splits  # final_documents
 
     # Main function to tie everything together
     def process_directory(self, elements=None, query=None, max_tokens=1000):
@@ -554,8 +594,89 @@ if __name__ == "__main__":
         #have to separate it from the loading process
         chatbot.process_answer(st)
 
-        
-        
+    # Save chat history
+    if st.button("Save Chat History"):
+        if 'user_id' in st.session_state:
+            user_id = st.session_state['user_id']
+            save_chat_history(user_id, st.session_state['chat_history'])
+            st.success("Chat history saved successfully!")
+        else:
+            st.error("User not logged in. Please log in to save chat history.")
 
-    
+if not os.path.exists('./files'):
+    os.makedirs('./files')
 
+st.title("TERNA Chatbot")
+
+# User registration and login
+st.sidebar.title("User Authentication")
+auth_choice = st.sidebar.selectbox("Choose Authentication", ["Login", "Register"])
+
+if auth_choice == "Register":
+    email = st.sidebar.text_input("Email")
+    password = st.sidebar.text_input("Password", type="password")
+    if st.sidebar.button("Register"):
+        response = register_user(email, password)
+        st.sidebar.success("User registered successfully!")
+
+if auth_choice == "Login":
+    email = st.sidebar.text_input("Email")
+    password = st.sidebar.text_input("Password", type="password")
+    if st.sidebar.button("Login"):
+        response = login_user(email, password)
+        if response.user:
+            st.sidebar.success("Logged in successfully!")
+            user_id = response.user.id
+            st.session_state['user_id'] = user_id
+            chat_history = load_chat_history(user_id)
+            st.session_state['chat_history'] = chat_history
+        else:
+            st.sidebar.error("Login failed!")
+
+if 'user_id' in st.session_state:
+    user_id = st.session_state['user_id']
+    if 'chat_history' not in st.session_state:
+        st.session_state['chat_history'] = []
+    if 'context_history' not in st.session_state:
+        st.session_state['context_history'] = []
+
+    processor = PreProcessor("./chroma_langchain_db", "amazon.titan-embed-text-v2:0", "eu.meta.llama3-2-1b-instruct-v1:0", "./unstructured-output/")
+    if not os.path.exists(processor.persist_directory) or len(os.listdir(processor.persist_directory)) <= 1:
+        placeholder = st.empty()
+        placeholder.write("Processing documents...")
+        processor.process_directory()
+        placeholder.empty()
+        if st.button("Process Documents"):
+            placeholder.write("Processing documents...")
+            processor.process_directory()
+        placeholder.empty()
+        if st.button("Clear Chat History"):
+            st.session_state['chat_history'].clear()
+            st.session_state['context_history'].clear()
+        if st.button("Shut Down App"):
+            st.warning("Shutting down the app...")
+            processor.shutdown_app()
+        chatbot = Chatbot(os.getcwd(), processor, query=None)
+        chatbot.process_answer(st)
+    else:
+        if st.button("Process Documents"):
+            placeholder.write("Processing documents...")
+            processor.delete_directory_contents(processor.persist_directory)
+            processor.process_directory()
+        placeholder.empty()
+        if st.button("Clear Chat History"):
+            st.session_state['chat_history'].clear()
+            st.session_state['context_history'].clear()
+        if st.button("Shut Down App"):
+            st.warning("Shutting down the app...")
+            processor.shutdown_app()
+        chatbot = Chatbot(os.getcwd(), processor, query=None)
+        chatbot.process_answer(st)
+
+    # Save chat history
+    if st.button("Save Chat History"):
+        save_chat_history(user_id, st.session_state['chat_history'])
+        st.success("Chat history saved successfully!")
+
+if not os.path.exists('./files'):
+    os.makedirs('./files')
