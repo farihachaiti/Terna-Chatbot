@@ -271,7 +271,7 @@ def download_changed_file(access_token, fileIDs):
             filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
 
             # Save the file locally
-            with open(filename, "wb") as f:
+            with open(f"files/{filename}", "wb") as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     f.write(chunk)
             print(f"File downloaded: {filename}")
@@ -329,11 +329,11 @@ def process_file(file_path, processor):
 
 if __name__ == "__main__":
     processor = PreProcessor("./chroma_langchain_db", "amazon.titan-embed-text-v2:0", "eu.meta.llama3-2-1b-instruct-v1:0", "./unstructured-output/")
-    if not os.path.exists(processor.persist_directory) or len(os.listdir(processor.persist_directory)) <= 1:     
+    '''if not os.path.exists(processor.persist_directory) or len(os.listdir(processor.persist_directory)) <= 1:     
             #processor.delete_directory_contents(processor.persist_directory)
             processor.process_directory()
 
-    '''path = os.path.join(os.getcwd(), 'files') # Replace with your directory path
+    path = os.path.join(os.getcwd(), 'files') # Replace with your directory path
     event_handler = ChangeHandler(processor)
     observer = Observer()
     observer.schedule(event_handler, path, recursive=True)
@@ -351,7 +351,7 @@ if __name__ == "__main__":
                 print(fileIDs)
                 download_changed_file(access_token, fileIDs)
             else:
-                print('ERROR!!!')
+                print('No files changed within last 1 day')
             '''while True:
             if keyboard.is_pressed('esc'):  # Check if the Esc key is pressed
                 print("Stopping observer...")
