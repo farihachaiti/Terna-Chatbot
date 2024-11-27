@@ -26,11 +26,13 @@ def run_pip_installations():
         "python-libmagic",
         "python-poppler",
         "--upgrade nltk",
-        "unstructured[local-inference]"
-        "streamlit"
-        "boto3"
-        "json"
-        "langchain-aws"
+        "unstructured[local-inference]",
+        "streamlit",
+        "boto3",
+        "json",
+        "langchain-aws",
+        "langid",
+        "python-dotenv"
     ]
 
     # Run pip commands to install each package

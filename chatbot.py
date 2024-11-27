@@ -88,7 +88,8 @@ import nltk
 import subprocess
 import getpass
 import streamlit as st
-# Unstructured processing function to ingest documents
+from dotenv import load_dotenv
+from transformers import GPT2TokenizerFast
 
 
 
@@ -274,25 +275,48 @@ class Chatbot:
         # Step 2: Set up the retriever for the vector store
         retriever = vectorstore.as_retriever(
             search_type="similarity",
-            search_kwargs={"k": 1}  # Retrieve the top 1 most similar document
+            search_kwargs={"k": 100}
         )
         
-        def format_docs(docs: Iterable[Document]):
-            return "\n\n".join(doc.page_content for doc in docs)
+        def format_docs(docs: Iterable[Document]) -> str:
+            """Format documents into a string, ensuring we don't exceed the token limit using the local tokenizer."""
+            tokenizer = GPT2TokenizerFast.from_pretrained('Xenova/claude-tokenizer')
+            context = ""
+            total_tokens = 0
+            token_limit = 8192
 
+            for doc in docs:
+                # Tokenize the content of the document
+                tokens = tokenizer.encode(doc.page_content)
+                doc_tokens = len(tokens)
+
+                # If adding this document's tokens would exceed the limit, stop
+                if total_tokens + doc_tokens <= token_limit:
+                    context += doc.page_content + "\n\n"
+                    total_tokens += doc_tokens
+                else:
+                    break
+
+            print(total_tokens)
+            return context
 
         # Step 4: Define the system prompt with the retrieved context
-        # Step 4: Define the system prompt with the retrieved context
-        template = """
-     "Context information is below.\n---------------------\n{context}\n---------------------\nGiven the context information and not prior knowledge, answer the query. Answer in Italian language if question is asked in Italian otherwise, answer in English language.\nQuery: {input}\nAnswer:\n"
-)
-            """
+        template = """You are a specialized assistant who provides information and solutions based exclusively on the database and available support documents."""
 
         prompt = ChatPromptTemplate.from_template(template)
 
         #custom_rag_prompt = PromptTemplate.from_template(template)
         st.session_state['chat_history'].append(("You", question))
 
+        # Get the last 5 relevant bot responses from the chat history
+        recent_bot_responses = [message for speaker, message in reversed(st.session_state['chat_history']) if speaker == "Bot"][:5]
+
+        # Step 1: Rephrase the question using the last 5 bot responses
+        if recent_bot_responses:
+            rephrase_prompt = f"Rephrase the following question in the context of these recent answers: {', '.join(recent_bot_responses)}. User's question: {question}"
+            rephrased_question = self.processor.llm.invoke(rephrase_prompt)
+        else:
+            rephrased_question = question
 
         rag_chain = (
             {"context": retriever | format_docs, "input": RunnablePassthrough()}
@@ -303,10 +327,24 @@ class Chatbot:
 
         rag_chain.invoke(question)
         contextualize_q_system_template = """
-            Given a chat history {chat_history} and the latest user question {input}
-            which might reference context in the chat history, 
-            answer precisely based on the retrieved context: {context} from the documents.
-            """
+        Your task is to analyze the user's question:
+        {input} 
+
+        and respond appropriately by following these guidelines:
+        1. Document Analysis:
+        - Look for identical or similar components in the documents provided that are present within the question, even if they do not address exactly the same topic.
+        - Carefully verify the relevance of the information found.
+        2. Formulation of the Response:
+        - Begin your answer directly with the answer to the user's question.
+        - Base your response strictly on the information present in the documents, without adding personal interpretations or reasoning.
+        - The response must be in the same language the user's question is in, comprehensive, and descriptive.
+        - Respond clearly and avoid unnecessary symbols.
+        - End the response after providing an answer to the question or stating the impossibility of responding.
+        3. In Case of Lack of Information:
+        - If you cannot find relevant information or similar components, clearly state that you cannot provide an answer to the question.
+
+        These are the contents you must use to respond to user questions: {context}
+        """
 
 
         contextualize_q_prompt = ChatPromptTemplate.from_template(contextualize_q_system_template)
@@ -324,19 +362,13 @@ class Chatbot:
         @retry_with_exponential_backoff  # Add retry to chain invocation
         def get_response(input_data):
             return rag_chain.invoke(input_data)
-        
-        # Check if there are at least two items in chat_history
-        if len(st.session_state['context_history']) >= 1:
-            last_two_messages = st.session_state['context_history'][-1:]
-        else:
-            # If there are fewer than two items, just return the available items (or handle as needed)
-            last_two_messages = []
 
         response = get_response({
-            "input": question,            # The user’s question
+            "input": rephrased_question,            
             "context": history_aware_retriever, 
-            "maxTokens": 3000,       # The retrieved context
-            "chat_history": last_two_messages,      # An empty chat history
+            "maxTokens": 1024,   
+            "temperature": 0.5,
+            "chat_history": recent_bot_responses,      
             })
         st.info(f"You: {question}")
         resp = "Bot: "
