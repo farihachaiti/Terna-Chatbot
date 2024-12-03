@@ -1,8 +1,1 @@
-__pycache__/
-venv/
-chroma_langchain_db/
-files/
-retrieved_documents_log.txt
-unstructured-output/
-docling_document_structure.txt
 .env

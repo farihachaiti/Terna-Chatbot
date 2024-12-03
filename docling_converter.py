@@ -1,24 +1,22 @@
 import logging
-import time
-from pathlib import Path
 import pandas as pd
-from typing import Iterator
-from uuid import uuid4
-from PIL import Image
+import backoff
 import base64
 from io import BytesIO
 import json
 import langid
-import boto3
+import time
 from pptx import Presentation
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
+import os
+import re
 from dotenv import load_dotenv
 from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents import Document as LCDocument
 from docling.document_converter import DocumentConverter
 from docling.datamodel.base_models import InputFormat
 from docling_core.types.doc import TextItem, ProvenanceItem, TableItem, PictureItem
+import openai
 from docling.document_converter import (
     DocumentConverter,
     PdfFormatOption,
@@ -31,7 +29,6 @@ from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 from docling.backend.mspowerpoint_backend import MsPowerpointDocumentBackend
 from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
-from docling.models.tesseract_ocr_model import TesseractOcrOptions
 from docling_core.types.doc import RefItem, TextItem, BoundingBox
 
 # Initialize logging
@@ -41,17 +38,15 @@ IMAGE_RESOLUTION_SCALE = 1.0
 
 
 class DoclingFileLoader(BaseLoader):
-    def __init__(self, file_path: str | list[str]) -> None:
+    def __init__(self, client, file_path: str | list[str]) -> None:
         load_dotenv()
-        self.bedrock_client = boto3.client("bedrock-runtime", region_name="eu-central-1")
+        self.bedrock_client = client
         self._file_paths = file_path if isinstance(file_path, list) else [file_path]
         self.pipeline_options = PdfPipelineOptions()
         self.pipeline_options.do_ocr = False
         self.pipeline_options.ocr_options.use_gpu = False
         self.pipeline_options.do_table_structure = True
         self.pipeline_options.images_scale = IMAGE_RESOLUTION_SCALE
-        # self.pipeline_options.generate_page_images = True
-        # self.pipeline_options.generate_table_images = True
         self.pipeline_options.generate_picture_images = True
         self.doc_converter = DocumentConverter(
             allowed_formats=[InputFormat.PPTX, InputFormat.PDF, InputFormat.IMAGE],
@@ -94,37 +89,50 @@ class DoclingFileLoader(BaseLoader):
             body = json.dumps(
                 {
                     "anthropic_version": "bedrock-2023-05-31",
-                    "max_tokens": 1000,
+                    "max_tokens": 500,
                     "messages": [
                         {
                             "role": "user",
-                            "content": [
+                            "content": json.dumps(
                                 {
-                                    "type": "image",
-                                    "source": {
-                                        "type": "base64",
-                                        "media_type": "image/jpeg",
-                                        "data": image_data,
-                                    },
-                                },
-                                {
-                                    "type": "text",
-                                    "text": f"Provide a clear and detailed description of the contents of the image. The language of the provided description should be {doc_language}"
-                                },
-                            ],
+                                    "type": "composite",
+                                    "elements": [
+                                        {
+                                            "type": "image",
+                                            "source": {
+                                                "type": "base64",
+                                                "format": "jpeg",
+                                                "media_type": "image/jpeg",
+                                                "data": image_data[:1000],  # Ensure 'data' contains the Base64 string
+                                            },
+                                        },
+                                        {
+                                            "type": "text",
+                                            "text": f"Provide a clear and detailed description of the contents of the image. The language of the provided description should be {doc_language}.",
+                                        },
+                                    ],
+                                }
+                            ),
                         }
                     ],
                 }
             )
-
-            # Make the API call
-            response = self.bedrock_client.invoke_model(
-                modelId="anthropic.claude-3-sonnet-20240229-v1:0",
-                body=body
-            )
+            @backoff.on_exception(backoff.expo, openai.RateLimitError, max_tries=3)
+            def get_response(modelId, body, max_tokens=500):
+                return self.bedrock_client.invoke_model(modelId=modelId, body=body)
+ 
+            
+            try:
+                # Call the model
+                response = get_response("anthropic.claude-3-sonnet-20240229-v1:0", body)
+                print(response)
+            except openai.RateLimitError as e:
+                print("Error: Rate limit exceeded. Please try again later.")
+                time.sleep(60) 
+            
 
             response_body = json.loads(response.get("body").read())
-            print(response_body['content'][0]['text'])
+        
 
             return response_body['content'][0]['text']
 
@@ -264,7 +272,7 @@ class DoclingFileLoader(BaseLoader):
                 )
 
                 dl_doc.texts.append(new_text_item)
-                print(f"Description added to texts list for page {page_no}: {description}")
+              
 
 
     def lazy_load(self) -> list[LCDocument]:
@@ -288,19 +296,46 @@ class DoclingFileLoader(BaseLoader):
                     output_file.write(f"Docling Document structure for {source}:\n")
                     output_file.write(f"{dl_doc.__dict__}\n\n")  # Write the dictionary structure
                     print(f"Docling Document structure for {source} written to file.")
-
-                    if dl_doc.tables:
-                        for table_ix, table in enumerate(dl_doc.tables):
-                            table_df: pd.DataFrame = table.export_to_dataframe()
-                            print(f"## Table {table_ix}")
-                            text = table_df.to_markdown()
-                            documents.append(LCDocument(page_content=text))
-
-                    else:
-                        # Export text if there are no images
-                        text = dl_doc.export_to_markdown()
-                        documents.append(LCDocument(page_content=text))  # Append the document to the list
-
+                    file_name = os.path.basename(source)
+                 
+                    with open('source_data.txt', "r") as file:
+                    
+                        for line in file:
+                            if f"filename: {file_name}" in line:
+                             
+                                # Split the line and extract the source data
+                                parts = line.split(", source: ")
+                                source_url = parts[1].strip()  # Return the source, stripping any extra whitespace
+                                match = re.match(r"(.*?/sites/[^/]+)", source_url)
+                                if match:
+                                    extracted_url = match.group(1)  # Extract the matched portion
+                                    # Append the filename
+                                    source_url = f"{extracted_url}/{file_name}"
+                                    print(source_url)
+                                    dl_doc.print_element_tree()
+                                    for item, level in dl_doc.iterate_items():
+                                        if isinstance(item, TextItem):
+                                            for prov in item.prov: 
+                                                text = item.text
+                                                page_no = prov.page_no
+                                                documents.append(LCDocument(page_content=text, metadata={"source": source_url, "filename": file_name, "page_number" : page_no}))
+                                        elif isinstance(item, TableItem):
+                                            table_df: pd.DataFrame = item.export_to_dataframe()
+                                            text = table_df.to_markdown()
+                                            for prov in item.prov:
+                                                page_no = prov.page_no
+                                                documents.append(LCDocument(page_content=text, metadata={"source": source_url, "filename": file_name, "page_number" : page_no}))
+                                    '''if dl_doc.tables:
+                                        for table_ix, table in enumerate(dl_doc.tables):
+                                            table_df: pd.DataFrame = table.export_to_dataframe()
+                                            print(f"## Table {table_ix}")
+                                            text = table_df.to_markdown()
+                                            documents.append(LCDocument(page_content=text, metadata={"source": source_url, "filename": file_name}))
+                                    else:
+                                        # Export text if there are no images
+                                        text = dl_doc.export_to_markdown()
+                                        documents.append(LCDocument(page_content=text, metadata={"source": source_url, "filename": file_name}))'''  # Append the document to the list
+                                    
                 except PermissionError as e:
                     print(f"PermissionError: {e}")
                     print("Ensure that the file is not open in another program and you have the necessary permissions.")
@@ -318,6 +353,7 @@ class DoclingFileLoader(BaseLoader):
 
     def load(self):
         try:
+            print('hi6')
             return list(self.lazy_load())  # Will consume the generator
         except StopIteration:
             return []  # Handle StopIteration gracefully, return empty list
