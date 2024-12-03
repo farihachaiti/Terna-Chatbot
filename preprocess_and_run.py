@@ -3,118 +3,75 @@ import warnings
 import os
 warnings.filterwarnings('ignore')
 import signal
-import shutil
+import logging
 from dotenv import load_dotenv
-##
-
-
-##
-
-import chromadb
-import time
-import random
 import re
-##
 from langchain_aws import ChatBedrock
 import boto3
 import json
-# Pre-process the pdf file
-os.environ['USER_AGENT'] = os.getenv("USER_AGENT")
-import multiprocessing
-from multiprocessing import Pool
 from pathlib import Path
 from langchain_core.documents import Document
-from unstructured.documents.elements import Image
 from uuid import uuid4
 from PIL import Image as PILImage
-import json, base64, io
-from io import BytesIO
-from langdetect import detect
-#from langchain_huggingface import HuggingFaceEmbeddings
+import json
 from langchain_community.embeddings import BedrockEmbeddings
-from langchain.prompts.prompt import PromptTemplate
-from langchain_openai import OpenAI, ChatOpenAI
-from langchain.chains import ConversationalRetrievalChain, LLMChain
+
 from langchain.chains.qa_with_sources import load_qa_with_sources_chain
 from langchain_community.vectorstores.utils import filter_complex_metadata
-from langchain_core.prompt_values import ChatPromptValue
-from langchain_core.runnables import RunnablePassthrough, RunnableParallel
-from langchain_core.output_parsers import StrOutputParser
-
-
-##
-from unstructured_client import UnstructuredClient
-from unstructured_client.models import shared
-from unstructured_client.utils import BackoffStrategy, RetryConfig
-from unstructured_client.models.errors import SDKError
-
-
-
-from unstructured_ingest.connector.local import SimpleLocalConfig
-from unstructured_ingest.interfaces import PartitionConfig, ProcessorConfig, ReadConfig
-from unstructured_ingest.v2.processes.chunker import ChunkerConfig
-from unstructured.partition.auto import partition
-from unstructured_ingest.runner import LocalRunner
-from unstructured.documents.elements import Title, Text, NarrativeText, Table, ListItem, Image
-from unstructured.staging.base import elements_from_json
-import logging
-
 
 import numpy as np
 import openai
 import backoff
-import pytesseract
-from sklearn.metrics.pairwise import cosine_similarity
-#from langchain.embeddings import OpenAIEmbeddings
+
 from langchain_chroma import Chroma
-
-from langchain_community.document_loaders import UnstructuredPowerPointLoader  # Unstructured PowerPoint loader
-from unstructured.staging.base import dict_to_elements # Assuming this is needed for Yolox output
-from typing import Sequence
-
-import bs4
-import chromadb
-from langchain import hub
-from langchain_core.output_parsers import StrOutputParser
-from langchain.chains import create_history_aware_retriever, create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
-#
-
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langgraph.checkpoint.memory import MemorySaver
-from langgraph.graph import START, StateGraph, MessagesState
 from langgraph.graph.message import add_messages
-from typing_extensions import Annotated, TypedDict
-#from langchain.llms import HuggingFacePipeline
-#from transformers import pipeline, T5Tokenizer, MT5ForQuestionAnswering
-
-import torch
-#from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSeq2SeqLM, T5ForConditionalGeneration, BitsAndBytesConfig
 import nltk
-import subprocess
-import getpass
-
 from chatbot import Chatbot
 from headers import run_pip_installations
 import streamlit as st
 from docling_converter import DoclingFileLoader
-from pptx import Presentation
-import fitz 
-import concurrent.futures
+
+#from supabase import create_client, Client
+
+
+from dotenv import load_dotenv
+import os
 
 load_dotenv()
 
+
+# Initialize Supabase client
+'''SUPABASE_URL = os.getenv('SUPABASE_URL')
+SUPABASE_KEY = os.getenv('SUPABASE_KEY')
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+def register_user(email, password):
+    response = supabase.auth.sign_up(email=email, password=password)
+    return response
+
+def login_user(email, password):
+    response = supabase.auth.sign_in(email=email, password=password)
+    return response
+
+def save_chat_history(user_id, chat_history):
+    data = {
+        "user_id": user_id,
+        "chat_history": chat_history
+    }
+    response = supabase.table('chat_history').insert(data).execute()
+    return response
+
+def load_chat_history(user_id):
+    response = supabase.table('chat_history').select('*').eq('user_id', user_id).execute()
+    return response.data'''
+
+
+os.environ['USER_AGENT'] = os.getenv("USER_AGENT")
 class PreProcessor:
 
 
     def __init__(self, p_dir, emb, llm, out_path):
- 
-        # Set the NLTK data directory to a custom path
-        #nltk.data.path.append('C:\\Users\\LENOVO\\AppData\\Roaming\\nltk_data')
-
-        # Then download the Punkt tokenizer
         try:
             # Attempt to load the tokenizer
             nltk.data.find('tokenizers/punkt')
@@ -128,9 +85,7 @@ class PreProcessor:
     
         self.model_name = emb
         self.output_path = out_path
-        #"sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-        # Initialize embeddings globally
-        #self.embeddings = HuggingFaceEmbeddings(model_name=self.model_name)
+
         self.bedrock_client = boto3.client("bedrock-runtime", region_name="eu-central-1")
         self.embeddings = BedrockEmbeddings(
                 client=self.bedrock_client, model_id=emb)
@@ -139,66 +94,13 @@ class PreProcessor:
         os.environ["LANGCHAIN_ENDPOINT"]=os.getenv("LANGCHAIN_ENDPOINT")
         os.environ["LANGCHAIN_API_KEY"]=os.getenv("LANGCHAIN_API_KEY")
         os.environ["LANGCHAIN_PROJECT"]=os.getenv("LANGCHAIN_PROJECT")
-
-
         os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
 
-
-        # Set-up Unstructured API credentials
         self.llm = ChatBedrock(client=self.bedrock_client, model_id=llm)
         
 
-
-
-    def huggingface_login(self):
-        # Ask the user to input their Hugging Face token securely
-        hf_token = getpass.getpass("Enter your Hugging Face token: ")
-
-        # Run the Hugging Face login command using the provided token
-        try:
-            subprocess.run(f"echo {hf_token} | huggingface-cli login", shell=True, check=True)
-            print("Successfully logged into Hugging Face!")
-        except subprocess.CalledProcessError as e:
-            print(f"Error during Hugging Face login: {e}")
-
-
-    
-
-
-    def ingest_documents(self, directory_path):
-         
-        os.makedirs(self.output_path, exist_ok=True)
- 
-        runner = LocalRunner(
-            processor_config=ProcessorConfig(
-            # logs verbosity
-            verbose=False,
-            # the local directory to store outputs
-            output_dir=self.output_path,
-            num_processes=2,
-            ),
-            read_config=ReadConfig(),
-            partition_config=PartitionConfig(
-                partition_by_api=False,
-                api_key="DTjTEIvxCqK1WpEXkMUco5dc4lqGTp",
-                strategy="hi_res",
-                ),
-            connector_config=SimpleLocalConfig(input_path=directory_path, recursive=False,),
-        )
-
-        # Run the document ingestion
-        runner.run()
-        print("Document ingestion completed. Output saved in:", self.output_path)
-        return self.output_path
-
-
     def process_table_text(self, text):
-        """
-        Extracts structured information from variable unstructured table text 
-        by using patterns to identify key sections dynamically. 
-        """
-        # Define a regular expression pattern to identify common sections
-        # This can be adjusted to match more specific phrases or variations
+
         pattern = re.compile(r'(?P<key>[A-Z\s]+)\s*([\d/,\s]+|N/A)', re.IGNORECASE)
         
         # Initialize a dictionary to store the extracted data
@@ -250,7 +152,7 @@ class PreProcessor:
             return None
 
     # Function to generate embeddings using Amazon Titan Text Embeddings V2
-    @backoff.on_exception(backoff.expo, openai.RateLimitError, max_tries=10)
+    @backoff.on_exception(backoff.expo, openai.RateLimitError, max_tries=5)
     def generate_titan_embedding(self, input_text):
         # Create a Bedrock Runtime client in the AWS Region of your choice.
         
@@ -273,45 +175,32 @@ class PreProcessor:
 
     # Backoff for embedding generation
     @backoff.on_exception(backoff.expo, openai.RateLimitError, max_tries=10)
-    def generate_embedding(self, chunks):
+    def generate_embedding(self, chunks, persist_dir=None):
         """Generate embedding for the user query with rate limit handling."""
-        #uuids = [str(uuid4()) for _ in range(len(chunks))]
-
-
         # Save the vector store
-        vector_store = Chroma.from_documents(
-        documents=chunks,
-        collection_name="chroma_index",
-        embedding=self.embeddings,
-        persist_directory=self.persist_directory,  # Where to save data locally, remove if not necessary
-        )
+        if persist_dir:
+            vector_store = Chroma.from_documents(
+            documents=chunks,
+            collection_name="chroma_index",
+            embedding=self.embeddings,
+            persist_directory=persist_dir,  # Where to save data locally, remove if not necessary
+            )
+        else:
+            vector_store = Chroma.from_documents(
+            documents=chunks,
+            collection_name="chroma_index",
+            embedding=self.embeddings,
+            persist_directory=self.persist_directory,  # Where to save data locally, remove if not necessary
+            )
         #docs = filter_complex_metadata(chunks)
         #vector_store.add_documents(documents=docs, ids=uuids)
 
         return vector_store
 
-    def delete_directory_contents(self, directory_path):
-        # Convert string path to Path object
-        path = Path(directory_path)
-        
-        # Check if it's a valid directory
-        if path.is_dir():
-            # Iterate over each item in the directory
-            for item in path.iterdir():
-                try:
-                    # If the item is a file, delete it
-                    if item.is_file() or item.is_symlink():
-                        item.unlink()  # Removes the file
-                    # If the item is a directory, delete it recursively
-                    elif item.is_dir():
-                        shutil.rmtree(item)  # Removes the directory and all contents
-                except Exception as e:
-                    print(f"Failed to delete {item}: {e}")
-        else:
-            raise ValueError(f"The path {directory_path} is not a valid directory.")
+
     
     # Function to initialize or load vector store
-    def load_or_initialize_vector_store(self, embeddings, elements=None):
+    def load_or_initialize_vector_store(self):
         try:
             # Attempt to load an existing vector store
             vector_store = Chroma(collection_name='chroma_index', persist_directory=self.persist_directory, embedding_function=self.embeddings)  # Using Chroma, replace with FAISS if necessary
@@ -321,7 +210,7 @@ class PreProcessor:
 
             else:
                 print("No vector store found, initializing a new one.")
-                chunks = self.process_pptx_data(elements)
+                chunks = self.process_pptx_data()
 
                 # Initialize a new vector store
                 # Save the new vector store
@@ -332,7 +221,7 @@ class PreProcessor:
         except Exception as e:
             print(f"Error loading vector store: {e}")
             # If there's an error, create a new vector store from the provided chunks
-            chunks = self.process_pptx_data(elements)
+            chunks = self.process_pptx_data()
 
             vector_store = self.generate_embedding(chunks)
             return vector_store  # Return the new vector store
@@ -354,55 +243,37 @@ class PreProcessor:
             elif directory_path.is_file():
                 # If it's a valid file, treat it as a single file path
                 self._file_paths = [str(directory_path)]
-
             else:
-                # If it's neither a file nor a directory, raise an error or handle it accordingly
-                raise ValueError(f"The path {file_path} is neither a valid directory nor a file.")
+                # If it's neither a file nor a directory, handle it accordingly
+                print(f"The path {file_path} is neither a valid directory nor a file.")
+                self._file_paths = []
 
-    def process_pptx_data(self, pptx_elements=None):
-        file_list = self.get_files_from_directory(os.path.join(os.getcwd(), 'files'))
+    def process_pptx_data(self):
+        self.get_files_from_directory(self.output_path)
 
-        loader = DoclingFileLoader(file_path=self._file_paths)
+        loader = DoclingFileLoader(self.bedrock_client, file_path=self._file_paths)
 
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=200, add_start_index=True)
         docs = loader.load()
-
+        print(docs)
         splits = text_splitter.split_documents(docs)
         
         return splits
 
     # Main function to tie everything together
-    def process_directory(self, elements=None, query=None, max_tokens=1000):
+    def process_directory(self):
         # Load or initialize the vector store
-        vector_store = self.load_or_initialize_vector_store(self.embeddings, elements)
+        #vector_store = self.load_or_initialize_vector_store()
         # Process the PPTX data again to obtain chunks
-        chunks = self.process_pptx_data(elements)
+        chunks = self.process_pptx_data()
 
         # Handle empty chunks case
         if not chunks:
             print(f"No chunks created from the provided elements. Skipping...")
             return
-
-        if vector_store:
-
-            # Generate UUIDs for each chunk
-            #uuids = [str(uuid4()) for _ in range(len(chunks))]
-
-            # Check if uuids are generated
-            #if not uuids:
-            #    print(f"No UUIDs generated for chunks. Skipping...")
-            #    return
-            
-            #docs = filter_complex_metadata(chunks)
-            # Add documents to the vector store
-            #vector_store.add_documents(documents=docs, ids=uuids)
-            vector_store = self.generate_embedding(chunks) 
-
         else:
-            print("Error: Vector Store not found! Creating and loading...")
-            # Generate a new vector store from the chunks
-            vector_store = self.generate_embedding(chunks)
-
+            vector_store = self.generate_embedding(chunks, self.persist_directory) 
+   
     def shutdown_app(self):
         """Function to shut down the Streamlit app."""
         # Get the current process id
@@ -415,8 +286,7 @@ class PreProcessor:
         # Assume documents are indexed with a metadata field `file_path`
         try:
             file_directory, filename = os.path.split(file_path)
-            #processor.vector_store = processor.load_or_initialize_vector_store(processor.embeddings, processor.elements)
-                # Save the vector store
+       
             vector_store = Chroma(
             collection_name="chroma_index",
             embedding_function=self.embeddings,
@@ -443,31 +313,115 @@ class PreProcessor:
 
 
 if __name__ == "__main__":
-    st.markdown("<h1 style='text-align: center;'>TERNA Chatbot</h1>", unsafe_allow_html=True)
+    st.title("TERNA Chatbot")
     # Display chat history in the sidebar
     placeholder = st.empty()
     if 'chat_history' not in st.session_state:
         st.session_state['chat_history'] = []
     if 'context_history' not in st.session_state:
         st.session_state['context_history'] = []
-    processor = PreProcessor("./chroma_langchain_db", "amazon.titan-embed-text-v2:0", "anthropic.claude-3-5-sonnet-20240620-v1:0", "./unstructured-output/")
+    if not os.path.exists("./chroma_langchain_db"):
+        os.mkdir("./chroma_langchain_db")
+    
+    processor = PreProcessor("./chroma_langchain_db", "amazon.titan-embed-text-v2:0", "anthropic.claude-3-5-sonnet-20240620-v1:0", os.path.join(os.getcwd(), 'files'))
     if not os.path.exists(processor.persist_directory) or len(os.listdir(processor.persist_directory)) <= 1:
         placeholder.write("Processing documents...")
        
         processor.process_directory()
         placeholder.empty()
-        chatbot = Chatbot(os.getcwd(), processor, query=None)
+        chatbot = Chatbot(processor)
         #have to separate it from the loading process
         chatbot.process_answer(st)
 
             
     else:
-        chatbot = Chatbot(os.getcwd(), processor, query=None)
+        chatbot = Chatbot(processor)
         #have to separate it from the loading process
         chatbot.process_answer(st)
 
-        
-        
+    # Save chat history
+    '''if st.button("Save Chat History"):
+        if 'user_id' in st.session_state:
+            user_id = st.session_state['user_id']
+            save_chat_history(user_id, st.session_state['chat_history'])
+            st.success("Chat history saved successfully!")
+        else:
+            st.error("User not logged in. Please log in to save chat history.")
 
-    
+if not os.path.exists('./files'):
+    os.makedirs('./files')
 
+st.title("TERNA Chatbot")
+
+# User registration and login
+st.sidebar.title("User Authentication")
+auth_choice = st.sidebar.selectbox("Choose Authentication", ["Login", "Register"])
+
+if auth_choice == "Register":
+    email = st.sidebar.text_input("Email")
+    password = st.sidebar.text_input("Password", type="password")
+    if st.sidebar.button("Register"):
+        response = register_user(email, password)
+        st.sidebar.success("User registered successfully!")
+
+if auth_choice == "Login":
+    email = st.sidebar.text_input("Email")
+    password = st.sidebar.text_input("Password", type="password")
+    if st.sidebar.button("Login"):
+        response = login_user(email, password)
+        if response.user:
+            st.sidebar.success("Logged in successfully!")
+            user_id = response.user.id
+            st.session_state['user_id'] = user_id
+            chat_history = load_chat_history(user_id)
+            st.session_state['chat_history'] = chat_history
+        else:
+            st.sidebar.error("Login failed!")
+
+if 'user_id' in st.session_state:
+    user_id = st.session_state['user_id']
+    if 'chat_history' not in st.session_state:
+        st.session_state['chat_history'] = []
+    if 'context_history' not in st.session_state:
+        st.session_state['context_history'] = []
+
+    processor = PreProcessor("./chroma_langchain_db", "amazon.titan-embed-text-v2:0", "eu.meta.llama3-2-1b-instruct-v1:0", "./unstructured-output/")
+    if not os.path.exists(processor.persist_directory) or len(os.listdir(processor.persist_directory)) <= 1:
+        placeholder = st.empty()
+        placeholder.write("Processing documents...")
+        processor.process_directory()
+        placeholder.empty()
+        if st.button("Process Documents"):
+            placeholder.write("Processing documents...")
+            processor.process_directory()
+        placeholder.empty()
+        if st.button("Clear Chat History"):
+            st.session_state['chat_history'].clear()
+            st.session_state['context_history'].clear()
+        if st.button("Shut Down App"):
+            st.warning("Shutting down the app...")
+            processor.shutdown_app()
+        chatbot = Chatbot(os.getcwd(), processor, query=None)
+        chatbot.process_answer(st)
+    else:
+        if st.button("Process Documents"):
+            placeholder.write("Processing documents...")
+            processor.delete_directory_contents(processor.persist_directory)
+            processor.process_directory()
+        placeholder.empty()
+        if st.button("Clear Chat History"):
+            st.session_state['chat_history'].clear()
+            st.session_state['context_history'].clear()
+        if st.button("Shut Down App"):
+            st.warning("Shutting down the app...")
+            processor.shutdown_app()
+        chatbot = Chatbot(os.getcwd(), processor, query=None)
+        chatbot.process_answer(st)
+
+    # Save chat history
+    if st.button("Save Chat History"):
+        save_chat_history(user_id, st.session_state['chat_history'])
+        st.success("Chat history saved successfully!")
+
+if not os.path.exists('./files'):
+    os.makedirs('./files')'''

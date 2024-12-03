@@ -1,115 +1,28 @@
 import requests
 from typing import List
-import asyncio
-import keyboard  # Import the keyboard library
-import json
 from datetime import datetime, timedelta
-from fastapi import FastAPI, Request
 import logging
-import time
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
 import os
+import shutil
 # Warning control
 import warnings
 import requests
 warnings.filterwarnings('ignore')
-import signal
 ##
 import os
 import requests
 import re
-
-##
-import chromadb
-import time
-import random
-import re
-##
-from langchain_aws import ChatBedrock
-import boto3
-import json
-# Pre-process the pdf file
-
-import multiprocessing
-from multiprocessing import Pool
-from pathlib import Path
-from langchain_core.documents import Document
-from unstructured.documents.elements import Image
-from uuid import uuid4
-from PIL import Image as PILImage
-import json, base64, io
-from io import BytesIO
-from langdetect import detect
-#from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.embeddings import BedrockEmbeddings
-from langchain.prompts.prompt import PromptTemplate
-from langchain_openai import OpenAI, ChatOpenAI
-from langchain.chains import ConversationalRetrievalChain, LLMChain
-from langchain.chains.qa_with_sources import load_qa_with_sources_chain
-from langchain_community.vectorstores.utils import filter_complex_metadata
-from langchain_core.prompt_values import ChatPromptValue
-from langchain_core.runnables import RunnablePassthrough, RunnableParallel
-from langchain_core.output_parsers import StrOutputParser
-
-
-##
-from unstructured_client import UnstructuredClient
-from unstructured_client.models import shared
-from unstructured_client.utils import BackoffStrategy, RetryConfig
-from unstructured_client.models.errors import SDKError
-
-
-
-from unstructured_ingest.connector.local import SimpleLocalConfig
-from unstructured_ingest.interfaces import PartitionConfig, ProcessorConfig, ReadConfig
-from unstructured_ingest.v2.processes.chunker import ChunkerConfig
-from unstructured.partition.auto import partition
-from unstructured_ingest.runner import LocalRunner
-from unstructured.documents.elements import Title, Text, NarrativeText, Table, ListItem, Image
-from unstructured.staging.base import elements_from_json
+from datetime import datetime
 import logging
 import requests
 import os
-from datetime import datetime, timedelta, timezone  # Make sure timezone is imported
-
-import numpy as np
-import openai
-import backoff
-import pytesseract
-from sklearn.metrics.pairwise import cosine_similarity
-#from langchain.embeddings import OpenAIEmbeddings
-from langchain_chroma import Chroma
-
-from langchain_community.document_loaders import UnstructuredPowerPointLoader  # Unstructured PowerPoint loader
-from unstructured.staging.base import dict_to_elements # Assuming this is needed for Yolox output
-from typing import Sequence
-
-import bs4
-import chromadb
-from langchain import hub
-from langchain_core.output_parsers import StrOutputParser
-from langchain.chains import create_history_aware_retriever, create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
-#
-
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langgraph.checkpoint.memory import MemorySaver
-from langgraph.graph import START, StateGraph, MessagesState
-from langgraph.graph.message import add_messages
-from typing_extensions import Annotated, TypedDict
-#from langchain.llms import HuggingFacePipeline
-#from transformers import pipeline, T5Tokenizer, MT5ForQuestionAnswering
-
-import torch
-#from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSeq2SeqLM, T5ForConditionalGeneration, BitsAndBytesConfig
-import nltk
-import subprocess
-import getpass
-
-from chatbot import Chatbot
+from datetime import datetime, timedelta
+from multiprocessing import Pool
+from pathlib import Path
+import logging
+import requests
+import os
+from datetime import datetime, timedelta, timezone
 from headers import run_pip_installations
 import streamlit as st
 from preprocess_and_run import PreProcessor
@@ -150,7 +63,7 @@ def get_access_token():
     return access_token
  
 
-
+# Need to check if we need this or not
 # Create a subscription
 def create_subscription(access_token):
     url = f"{os.getenv("SITE_URL")}/subscriptions"
@@ -169,12 +82,14 @@ def create_subscription(access_token):
         print(f"Failed to create subscription: {response.status_code}, {response.text}")
         return None
 
-# Webhook endpoint for receiving OneDrive notifications
-import requests
-import os
-from datetime import datetime, timedelta
 
-def get_changes(access_token):
+
+def get_changes(access_token, file_name="next_query.txt"):
+    has_to_process = None
+    if os.path.exists(file_name):
+        delta_link = load_delta_link()
+    else:
+        delta_link = None
     # Delta query URL for the SharePoint site
     url = f"https://graph.microsoft.com/v1.0/sites/{os.getenv('SITE_ID')}/drive/root/delta"
     
@@ -186,10 +101,13 @@ def get_changes(access_token):
     deleted = []
 
     # Set the threshold date (3 days ago for example) and make it UTC-aware
-    three_days_ago = datetime.utcnow().replace(tzinfo=timezone.utc) - timedelta(days=1)
+    one_day_ago = datetime.utcnow().replace(tzinfo=timezone.utc) - timedelta(days=30)
 
-    # Start the delta query to get changes
-    response = requests.get(url, headers=headers)
+    if delta_link:
+        response = requests.get(delta_link, headers=headers)
+    else:
+        # Start the delta query to get changes
+        response = requests.get(url, headers=headers)
     
     if response.status_code == 200:
         print("Response status:", response.status_code)
@@ -197,7 +115,7 @@ def get_changes(access_token):
         print("Response content:", response.text)
 
         changes = response.json()
-
+   
         # Process the changes in the first page
         for item in changes.get("value", []):
             # Check if the change is for a file and not deleted
@@ -206,17 +124,25 @@ def get_changes(access_token):
                 last_modified = datetime.fromisoformat(item["lastModifiedDateTime"]).astimezone(timezone.utc)
                 
                 # Filter by modified date (only include files modified in the last 3 days)
-                if last_modified >= three_days_ago:
-                    print(f"File changed or added: {item['name']} (ID: {item['id']})")
-                    fileIDs.append(item['id'])  # Add the file ID to the list
+                if last_modified >= one_day_ago:
+                    flag = check_file_status(item["createdDateTime"], item["lastModifiedDateTime"])
+                    if flag == "added":
+                        print(f"File added: {item['name']} (ID: {item['id']})")
+                        fileIDs.append(item['id'])  # Add the file ID
+                        
+                    elif flag == "modified":
+                        print(f"File modified: {item['name']} (ID: {item['id']})")
+                        fileIDs.append(item['id'])  # Add the file ID
+                    has_to_process = True
             elif "deleted" in item:  # Skip deleted files
-                print(f"File deleted (skipped): {item}")
+                print(f"File deleted (skipped): {item['id']}")
                 deleted.append(item)  # You can track deleted files if needed
 
         # Store the deltaLink for incremental queries
         delta_link = changes.get("@odata.deltaLink")
         if delta_link:
             print("deltaLink:", delta_link)
+            save_delta_link(delta_link)
         
         # Handle pagination if there are more changes to fetch
         while "@odata.nextLink" in changes:
@@ -227,7 +153,7 @@ def get_changes(access_token):
                 return None
 
             changes = response.json()
-
+            
             # Process the changes in the next page
             for item in changes.get("value", []):
                 # Check if the change is for a file and not deleted
@@ -236,22 +162,142 @@ def get_changes(access_token):
                     last_modified = datetime.fromisoformat(item["lastModifiedDateTime"]).astimezone(timezone.utc)
                     
                     # Filter by modified date (only include files modified in the last 3 days)
-                    if last_modified >= three_days_ago:
-                        print(f"File changed or added: {item['name']} (ID: {item['id']})")
-                        fileIDs.append(item['id'])  # Add the file ID
+                    if last_modified >= one_day_ago:
+                        flag = check_file_status(item["lastModifiedDatcreatedDateTimeeTime"], item["lastModifiedDateTime"])
+                        if flag == "added":
+                            print(f"File added: {item['name']} (ID: {item['id']})")
+                            fileIDs.append(item['id'])  # Add the file ID
+                            
+                        elif flag == "modified":
+                            print(f"File modified: {item['name']} (ID: {item['id']})")
+                            fileIDs.append(item['id'])  # Add the file ID
+                    has_to_process = True
                 elif "deleted" in item:
-                    print(f"File deleted (skipped): {item}")
+                    print(f"File deleted (skipped): {item['id']}")
                     deleted.append(item)  # You can track deleted files if needed
-
+     
+        if has_to_process:
+            save_source(changes, has_to_process, [])
+        if deleted:
+            save_source(changes, False, deleted)
         # Print final list of changed or added file IDs
-        print("Changed or added file IDs:", fileIDs)
-        return fileIDs, delta_link  # Return both file IDs and deltaLink
-
+        print("Changed file IDs:", fileIDs)
+        print("Deleted file IDs:", deleted)
+        return fileIDs, deleted  # Return both file IDs and deltaLink
     else:
         print(f"Error fetching changes: {response.status_code}, {response.text}")
         return None, None
 
 
+def save_delta_link(delta_link, file_name="next_query.txt"):
+    """
+    Save the delta link to a file for later use.
+    """
+    with open(file_name, "w") as file:
+        file.write(delta_link)
+    print(f"Delta link saved to {file_name}")
+
+def load_delta_link(file_name="next_query.txt"):
+    """
+    Load the delta link from the file if it exists.
+    """
+    if os.path.exists(file_name):
+        with open(file_name, "r") as file:
+            delta_link = file.read().strip()
+        print(f"Delta link loaded from {file_name}: {delta_link}")
+        return delta_link
+    else:
+        print(f"No delta link found in {file_name}.")
+        return None
+
+
+def save_source(response_data, has_to_process, deleted=[]):
+    # File to save the output
+    output_file = "source_data.txt"
+    print('hi')
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+
+    # Step 1: Load existing IDs from the file and filenames if deleted is True
+    existing_ids = set()
+    id_to_filename = {}
+
+    # If deleted is True, we will map ids to filenames to retrieve them later
+    if os.path.exists(output_file) and deleted:
+        with open(output_file, "r") as file:
+            for line in file:
+                # Extract the id and filename from lines in the format "filename: ..., id: ..., source: ..."
+                parts = line.strip().split(", id: ")
+                if len(parts) == 2:
+                    file_info = parts[0].strip()  # Get "filename: <filename>"
+                    item_id = parts[1].split(",")[0]  # Get the id value before any trailing commas
+                    filename = file_info.split(":")[1].strip()  # Extract the filename
+                    id_to_filename[item_id] = filename  # Store the filename by ID
+                    existing_ids.add(item_id)
+
+        # For deleted files, retrieve the filename by ID
+        for item_id in deleted:  # `value` contains the list of items
+            delete_locally(id_to_filename[item_id])
+            delete_from_vectorstore(id_to_filename[item_id])
+            delete_line_by_id(output_file, item_id)
+            print(f"File with ID {item_id} is deleted. Filename: {id_to_filename[item_id]}")
+  
+    
+    # Step 2: Process new items (non-deleted)
+    elif os.path.exists(output_file) and has_to_process:
+        with open(output_file, "a") as file:  # Append to the file
+            for item in response_data.get("value", []):  # `value` contains the list of items
+                item_id = item.get("id", "Unknown ID")  # Extract the ID, default to "Unknown ID"
+                
+                if item_id in existing_ids:  # Skip if the ID already exists
+                    delete_line_by_id(output_file, item_id)
+                    delete_locally(id_to_filename[item_id])
+                    delete_from_vectorstore(id_to_filename[item_id])
+                    print(f"Modified File with ID {item_id} is deleted. Filename: {id_to_filename[item_id]}")
+     
+                # Extract other fields
+                filename = item.get("name", "Unknown Name")  # Get the filename
+                path = item.get("path", "Unknown Path")  # Get the file path
+                web_url = item.get("webUrl", "Unknown URL")  # Get the web URL
+
+                # Write the new data to the file
+                file.write(f"filename: {filename}, id: {item_id}, source: {web_url}\n")
+
+    print(f"Processed data and updated {output_file}.")
+
+
+
+
+def check_file_status(created_datetime: str, last_modified_datetime: str) -> str:
+    # Define the format for parsing the date strings (ISO 8601 with UTC 'Z')
+    datetime_format = "%Y-%m-%dT%H:%M:%SZ"  # Matches the format "2024-10-13T00:18:04Z"
+
+    # Convert the strings to datetime objects
+    created_dt = datetime.strptime(created_datetime, datetime_format)
+    modified_dt = datetime.strptime(last_modified_datetime, datetime_format)
+
+    # Compare the full datetime, including time, and check if the difference is <= 1 minute
+    time_diff = abs(modified_dt - created_dt)
+
+    if time_diff <= timedelta(minutes=1):  # 1-minute tolerance
+        return 'added'
+    else:
+        return 'modified'
+
+def delete_line_by_id(output_file, target_id):
+    # Step 1: Read the file and collect lines that do not contain the target_id
+    remaining_lines = []
+    
+    with open(output_file, "r") as file:
+        for line in file:
+            # Check if the line contains the target_id
+            if target_id not in line:
+                remaining_lines.append(line)  # Keep lines that don't contain the target_id
+    
+    # Step 2: Rewrite the file with the remaining lines
+    with open(output_file, "w") as file:
+        file.writelines(remaining_lines)
+    
+    print(f"Line with ID {target_id} has been deleted if it existed.")
 
 def download_changed_file(access_token, fileIDs):
     for fileID in fileIDs:
@@ -271,6 +317,8 @@ def download_changed_file(access_token, fileIDs):
             filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
 
             # Save the file locally
+            if not os.path.exists('files/'):
+                os.makedirs('files/')
             with open(f"files/{filename}", "wb") as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     f.write(chunk)
@@ -287,69 +335,51 @@ def delete_from_vectorstore(file_paths):
 def delete_locally(file_path):
     # Convert file path to corresponding unstructured file path
     file_name = os.path.basename(file_path)  
-    unstructured_file = f"{processor.output_path}/{file_name}.json"
-    try:
-        os.remove(unstructured_file)
-        print(f"Deleted unstructured output for {file_path}")
-    except FileNotFoundError:
-        print(f"Unstructured output not found for {file_path}")
-    except Exception as e:
-        print(f"Error deleting unstructured output: {e}")
-
-
-class ChangeHandler(FileSystemEventHandler):
-    def __init__(self, processor):
-        super().__init__()
-        self.processor = processor
-
-    def on_modified(self, event):
-        print(f"File modified: {event.src_path}")
-        process_file(event.src_path, self.processor)
-
-    def on_created(self, event):
-        print(f"File created: {event.src_path}")
-        process_file(event.src_path, self.processor)
-
-    def on_deleted(self, event):
-        print(f"File deleted: {event.src_path}")
-        delete_from_vectorstore(event.src_path)
-        delete_locally(event.src_path)
-
-
-def process_file(file_path, processor):
-    # Your code to process the file
-    print(f"Processing file: {file_path}")
-    elements = []
-    output_directory = processor.ingest_documents(file_path)
-    for filename in os.listdir(output_directory):
-        filepath = os.path.join(output_directory, filename)
-        elements.extend(elements_from_json(filepath))       
-    processor.process_directory(elements)
+    file_to_delete = f"{processor.output_path}/{file_name}"
     
+    try:
+        os.remove(file_to_delete)
+        print(f"Deleted file locally output for {file_path}")
+    except FileNotFoundError:
+        print(f"File not found locally {file_path}")
+    except Exception as e:
+        print(f"Error deleting file locally: {e}")
+      
+def delete_directory_contents(directory_path):
+    # Convert string path to Path object
+    path = Path(directory_path)
+    
+    # Check if it's a valid directory
+    if path.is_dir():
+        # Iterate over each item in the directory
+        for item in path.iterdir():
+            try:
+                # If the item is a file, delete it
+                if item.is_file() or item.is_symlink():
+                    item.unlink()  # Removes the file
+                # If the item is a directory, delete it recursively
+                elif item.is_dir():
+                    shutil.rmtree(item)  # Removes the directory and all contents
+            except Exception as e:
+                print(f"Failed to delete {item}: {e}")
+    else:
+        raise ValueError(f"The path {directory_path} is not a valid directory.")
 
 if __name__ == "__main__":
-    processor = PreProcessor("./chroma_langchain_db", "amazon.titan-embed-text-v2:0", "eu.meta.llama3-2-1b-instruct-v1:0", "./unstructured-output/")
-    '''if not os.path.exists(processor.persist_directory) or len(os.listdir(processor.persist_directory)) <= 1:     
-            #processor.delete_directory_contents(processor.persist_directory)
-            processor.process_directory()
-
-    path = os.path.join(os.getcwd(), 'files') # Replace with your directory path
-    event_handler = ChangeHandler(processor)
-    observer = Observer()
-    observer.schedule(event_handler, path, recursive=True)
-    observer.start()'''
-
-
+    processor = PreProcessor("./chroma_langchain_db", "amazon.titan-embed-text-v2:0", "anthropic.claude-3-5-sonnet-20240620-v1:0", os.path.join(os.getcwd(), 'files'))
 
     try:
         access_token = get_access_token()
         print(access_token)
         if access_token:
-            fileIDs, delta_link = get_changes(access_token)
+            fileIDs, deleted = get_changes(access_token)
             
             if fileIDs:
                 print(fileIDs)
+                delete_directory_contents(processor.output_path)
                 download_changed_file(access_token, fileIDs)
+                processor.process_directory()
+         
             else:
                 print('No files changed within last 1 day')
             '''while True:
@@ -359,6 +389,3 @@ if __name__ == "__main__":
             time.sleep(1)'''
     except Exception as e:
         print(f"Error: {e}")
-    #finally:
-        #observer.stop()
-        #observer.join()
