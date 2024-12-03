@@ -42,29 +42,7 @@ load_dotenv()
 
 
 # Initialize Supabase client
-'''SUPABASE_URL = os.getenv('SUPABASE_URL')
-SUPABASE_KEY = os.getenv('SUPABASE_KEY')
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-def register_user(email, password):
-    response = supabase.auth.sign_up(email=email, password=password)
-    return response
-
-def login_user(email, password):
-    response = supabase.auth.sign_in(email=email, password=password)
-    return response
-
-def save_chat_history(user_id, chat_history):
-    data = {
-        "user_id": user_id,
-        "chat_history": chat_history
-    }
-    response = supabase.table('chat_history').insert(data).execute()
-    return response
-
-def load_chat_history(user_id):
-    response = supabase.table('chat_history').select('*').eq('user_id', user_id).execute()
-    return response.data'''
 
 
 os.environ['USER_AGENT'] = os.getenv("USER_AGENT")
@@ -339,89 +317,3 @@ if __name__ == "__main__":
         #have to separate it from the loading process
         chatbot.process_answer(st)
 
-    # Save chat history
-    '''if st.button("Save Chat History"):
-        if 'user_id' in st.session_state:
-            user_id = st.session_state['user_id']
-            save_chat_history(user_id, st.session_state['chat_history'])
-            st.success("Chat history saved successfully!")
-        else:
-            st.error("User not logged in. Please log in to save chat history.")
-
-if not os.path.exists('./files'):
-    os.makedirs('./files')
-
-st.title("TERNA Chatbot")
-
-# User registration and login
-st.sidebar.title("User Authentication")
-auth_choice = st.sidebar.selectbox("Choose Authentication", ["Login", "Register"])
-
-if auth_choice == "Register":
-    email = st.sidebar.text_input("Email")
-    password = st.sidebar.text_input("Password", type="password")
-    if st.sidebar.button("Register"):
-        response = register_user(email, password)
-        st.sidebar.success("User registered successfully!")
-
-if auth_choice == "Login":
-    email = st.sidebar.text_input("Email")
-    password = st.sidebar.text_input("Password", type="password")
-    if st.sidebar.button("Login"):
-        response = login_user(email, password)
-        if response.user:
-            st.sidebar.success("Logged in successfully!")
-            user_id = response.user.id
-            st.session_state['user_id'] = user_id
-            chat_history = load_chat_history(user_id)
-            st.session_state['chat_history'] = chat_history
-        else:
-            st.sidebar.error("Login failed!")
-
-if 'user_id' in st.session_state:
-    user_id = st.session_state['user_id']
-    if 'chat_history' not in st.session_state:
-        st.session_state['chat_history'] = []
-    if 'context_history' not in st.session_state:
-        st.session_state['context_history'] = []
-
-    processor = PreProcessor("./chroma_langchain_db", "amazon.titan-embed-text-v2:0", "eu.meta.llama3-2-1b-instruct-v1:0", "./unstructured-output/")
-    if not os.path.exists(processor.persist_directory) or len(os.listdir(processor.persist_directory)) <= 1:
-        placeholder = st.empty()
-        placeholder.write("Processing documents...")
-        processor.process_directory()
-        placeholder.empty()
-        if st.button("Process Documents"):
-            placeholder.write("Processing documents...")
-            processor.process_directory()
-        placeholder.empty()
-        if st.button("Clear Chat History"):
-            st.session_state['chat_history'].clear()
-            st.session_state['context_history'].clear()
-        if st.button("Shut Down App"):
-            st.warning("Shutting down the app...")
-            processor.shutdown_app()
-        chatbot = Chatbot(os.getcwd(), processor, query=None)
-        chatbot.process_answer(st)
-    else:
-        if st.button("Process Documents"):
-            placeholder.write("Processing documents...")
-            processor.delete_directory_contents(processor.persist_directory)
-            processor.process_directory()
-        placeholder.empty()
-        if st.button("Clear Chat History"):
-            st.session_state['chat_history'].clear()
-            st.session_state['context_history'].clear()
-        if st.button("Shut Down App"):
-            st.warning("Shutting down the app...")
-            processor.shutdown_app()
-        chatbot = Chatbot(os.getcwd(), processor, query=None)
-        chatbot.process_answer(st)
-
-    # Save chat history
-    if st.button("Save Chat History"):
-        save_chat_history(user_id, st.session_state['chat_history'])
-        st.success("Chat history saved successfully!")
-
-if not os.path.exists('./files'):
-    os.makedirs('./files')'''
