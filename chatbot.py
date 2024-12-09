@@ -56,12 +56,6 @@ class Chatbot:
         for idx, (speaker, message) in enumerate(st.session_state.chat_history):
             st.write(f"**{speaker}:** {message}")
             index = idx
-
-        # Step 2: Display contexts after all speakers
-        for c_idx, (context, desc) in enumerate(st.session_state.context_history):
-            if c_idx == index:
-                st.write(f"**{context}:** {desc}")
-
             
         if not question:
             st.write("Please ask a valid question.")
@@ -136,9 +130,21 @@ class Chatbot:
 
         and respond appropriately by following these guidelines:
      
-        1. Formulation of the Response:
-        - The response must be in the same language the user's question is in, comprehensive, and descriptive. Do not add your own ideas.
-        2. Always must Answer either in Italian or in English in which language the question is asked. Must translate the provided support documents content from Italian to English to answer in English if the question is asked in English.
+        1. Language of the Response:
+        - Always must Answer either in Italian or in English in which language the question is asked. 
+        - If the question is asked in English then must translate the provided support documents content from Italian to English to answer in English. Otherwise answer in Italian.
+        2. Document Analysis:
+        - Look for identical or similar components in the documents provided that are present within the question, even if they do not address exactly the same topic.
+        - Carefully verify the relevance of the information found.
+        3. Formulation of the Response:
+        - Do not add your own ideas.
+        - Begin your answer directly with the answer to the user's question.
+        - Base your response strictly on the information present in the newly retrieved documents, without adding personal interpretations or reasoning.
+        - The response must be in the same language the user's question is in, comprehensive, and descriptive.
+        - Respond clearly and avoid unnecessary symbols.
+        - End the response after providing an answer to the question or stating the impossibility of responding.
+        4. In Case of Lack of Information:
+        - If you cannot find relevant information or similar components, clearly state that you cannot provide an answer to the question.
         These are the contents you must use to respond to user questions: {context}
         """
 
@@ -158,7 +164,7 @@ class Chatbot:
 
         response = get_response({
             "input": rephrased_question,            
-            "context": history_aware_retriever, 
+            "context": history_aware_retriever,
             "maxTokens": 1024,   
             "temperature": 0.5,
             "chat_history": recent_bot_responses,      
@@ -180,19 +186,46 @@ class Chatbot:
        
 
         if 'context' in response and len(response['context']) > 0:
+            print(len(response['context']))
+            print(response['context'])
             with st.empty():
                 src = "Sources of Context: "
                 for context_item in response['context']:
                     source = context_item.metadata.get("source", context_item.metadata.get("filename"))
                     page_no = context_item.metadata.get("page_number", None)
+                    print(source, page_no)
                     #context = context_item.page_content
-                    if st.empty():
-                        st.info(src + '\n' + source + '\n' + "Page Number: " + str(page_no))
-                        st.session_state['context_history'].append(('Context', src + '\n' + source + '\n' + "Page Number: " + str(page_no)))
-                    else:
-                        st.info(source + '\n' + "Page Number: " + str(page_no))
-                        st.session_state['context_history'].append(('Context', st.info(source + '\n' + "Page Number: " + str(page_no))))
+                    
+                    #st.info(src + '\n' + source + '\n' + "Page Number: " + str(page_no))
+                    if len(st.session_state['context_history']) <= index:
+                        # Extend the list with empty lists until the index is reached
+                         st.session_state['context_history'].extend([[] for _ in range(index - len(st.session_state['context_history']) + 1)])
+                    st.session_state['context_history'][index].append(('Context', source + '\n' + "Page Number: " + str(page_no)))
 
+        if index < len(st.session_state['context_history']):
+            # Extract unique entries based on the last index value (e.g., page number)
+            unique_contexts = []
+            seen_values = set()
+
+            for context in st.session_state['context_history'][index]:
+                # Get the last value (e.g., page number)
+                last_value = context[1].split()[-1]
+                print(last_value)
+                
+                if last_value not in seen_values:
+                    unique_contexts.append(context)
+                    seen_values.add(last_value)
+
+                # Stop if we already have 3 unique entries
+                if len(unique_contexts) == 3:
+                    break
+
+        # Display the first 3 unique entries
+        print(unique_contexts)
+        st.info('First 3 unique ' + src + '\n')
+        for unique_context in unique_contexts:
+            st.info(unique_context[1])
+        
     def ensure_italian(self, text):
         #while detect(text) == 'en':
         translated_text = GoogleTranslator(source='en', target='it').translate(text)

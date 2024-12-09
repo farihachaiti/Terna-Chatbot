@@ -15,7 +15,7 @@ from uuid import uuid4
 from PIL import Image as PILImage
 import json
 from langchain_community.embeddings import BedrockEmbeddings
-
+import subprocess
 from langchain.chains.qa_with_sources import load_qa_with_sources_chain
 from langchain_community.vectorstores.utils import filter_complex_metadata
 
@@ -31,7 +31,11 @@ from chatbot import Chatbot
 from headers import run_pip_installations
 import streamlit as st
 from docling_converter import DoclingFileLoader
-
+logging.basicConfig(
+    filename='app.log',        # File to write logs to
+    level=logging.DEBUG,       # Set the minimum log level
+    format='%(asctime)s - %(levelname)s - %(message)s'  # Log format
+)
 #from supabase import create_client, Client
 
 
@@ -55,7 +59,6 @@ class PreProcessor:
             nltk.data.find('tokenizers/punkt')
         except LookupError:
             # If not found, download it
-            print("Downloading the 'punkt' tokenizer...")
             nltk.download('punkt')
         # Initialize a set to keep track of added IDs
         self.elements = []
@@ -122,11 +125,11 @@ class PreProcessor:
                 # Process as unstructured text using keywords
                 text = table_element.text
                 table_data = self.process_table_text(text)  # Parse the plain text data as per the process_table_text function
-            print(table_data)
             return table_data
         
         except AttributeError as e:
             print(f"Error processing table element: {e}")
+            logging.error(f"Error processing table element: {e}")
             return None
 
     # Function to generate embeddings using Amazon Titan Text Embeddings V2
@@ -188,6 +191,7 @@ class PreProcessor:
 
             else:
                 print("No vector store found, initializing a new one.")
+                logging.warning("No vector store found, initializing a new one.")
                 chunks = self.process_pptx_data()
 
                 # Initialize a new vector store
@@ -198,6 +202,7 @@ class PreProcessor:
 
         except Exception as e:
             print(f"Error loading vector store: {e}")
+            logging.error(f"Error loading vector store: {e}")
             # If there's an error, create a new vector store from the provided chunks
             chunks = self.process_pptx_data()
 
@@ -224,6 +229,7 @@ class PreProcessor:
             else:
                 # If it's neither a file nor a directory, handle it accordingly
                 print(f"The path {file_path} is neither a valid directory nor a file.")
+                logging.warning(f"The path {file_path} is neither a valid directory nor a file.")
                 self._file_paths = []
 
     def process_pptx_data(self):
@@ -233,7 +239,6 @@ class PreProcessor:
 
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=200, add_start_index=True)
         docs = loader.load()
-        print(docs)
         splits = text_splitter.split_documents(docs)
         
         return splits
@@ -248,6 +253,7 @@ class PreProcessor:
         # Handle empty chunks case
         if not chunks:
             print(f"No chunks created from the provided elements. Skipping...")
+            logging.warning(f"No chunks created from the provided elements. Skipping...")
             return
         else:
             vector_store = self.generate_embedding(chunks, self.persist_directory) 
@@ -260,11 +266,11 @@ class PreProcessor:
         os.kill(pid, signal.SIGINT)
 
 
-    def delete_from_vectorstore(self, file_path):
+    def delete_from_vectorstore(self, filename):
         # Assume documents are indexed with a metadata field `file_path`
         try:
-            file_directory, filename = os.path.split(file_path)
-       
+            #file_directory, filename = os.path.split(file_path)
+            
             vector_store = Chroma(
             collection_name="chroma_index",
             embedding_function=self.embeddings,
@@ -279,20 +285,35 @@ class PreProcessor:
                 metadata = coll['metadatas'][idx]
                 if metadata['filename'] == filename:
                     ids_to_del.append(id)
-
   
             vector_store.adelete(ids=ids_to_del) 
           
-            print(f"Deleted vectorstore entry for {file_path}")
-
+            print(f"Deleted vectorstore entry for {filename}")
+            logging.info(f"Deleted vectorstore entry for {filename}")
         except Exception as e:
             print(f"Error deleting from vectorstore: {e}")
+            logging.error(f"Error deleting from vectorstore: {e}")
 
 
 
 if __name__ == "__main__":
-    st.title("TERNA Chatbot")
-    # Display chat history in the sidebar
+    st.markdown(
+        """
+        <style>
+        .centered-title {
+            text-align: center;
+            font-size: 3.5em; /* Adjust size for better visuals */
+            font-weight: bold;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    
+    # Use a div with the centered-title class for alignment
+    st.markdown("<div class='centered-title'>TERNA Chatbot</div>", unsafe_allow_html=True)
+
     placeholder = st.empty()
     if 'chat_history' not in st.session_state:
         st.session_state['chat_history'] = []
@@ -305,7 +326,8 @@ if __name__ == "__main__":
     if not os.path.exists(processor.persist_directory) or len(os.listdir(processor.persist_directory)) <= 1:
         placeholder.write("Processing documents...")
        
-        processor.process_directory()
+        #processor.process_directory()
+        subprocess.run(["python", "preprocessor_cron.py"]) 
         placeholder.empty()
         chatbot = Chatbot(processor)
         #have to separate it from the loading process

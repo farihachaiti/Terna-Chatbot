@@ -30,9 +30,11 @@ from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 from docling.backend.mspowerpoint_backend import MsPowerpointDocumentBackend
 from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
 from docling_core.types.doc import RefItem, TextItem, BoundingBox
-
-# Initialize logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    filename='app.log',        # File to write logs to
+    level=logging.DEBUG,       # Set the minimum log level
+    format='%(asctime)s - %(levelname)s - %(message)s'  # Log format
+)
 
 IMAGE_RESOLUTION_SCALE = 1.0
 
@@ -77,6 +79,7 @@ class DoclingFileLoader(BaseLoader):
                 return lang
             except Exception as e:
                 print(f"Error detecting language: {e}")
+                logging.warning(f"Error detecting language: {e}")
                 return 'en'  # Default to English if detection fails
         return 'en'  # Default to English if no text is available
 
@@ -125,9 +128,9 @@ class DoclingFileLoader(BaseLoader):
             try:
                 # Call the model
                 response = get_response("anthropic.claude-3-sonnet-20240229-v1:0", body)
-                print(response)
             except openai.RateLimitError as e:
                 print("Error: Rate limit exceeded. Please try again later.")
+                logging.error("Error: Rate limit exceeded. Please try again later.")
                 time.sleep(60) 
             
 
@@ -138,6 +141,7 @@ class DoclingFileLoader(BaseLoader):
 
         except Exception as e:
             print(f"Error in generate_image_description: {e}")
+            logging.error(f"Error in generate_image_description: {e}")
 
 
     def process_pptx_page_images(self, dlc_doc, pptx_path) -> None:
@@ -180,6 +184,7 @@ class DoclingFileLoader(BaseLoader):
                         descriptions[page_no] = description
                 except Exception as e:
                     print(f"Error processing image: {e}")
+                    logging.error(f"Error processing image: {e}")
 
         # Interleave descriptions into the document at the correct figure locations
         self.interleave_descriptions(dlc_doc, descriptions)  
@@ -225,6 +230,7 @@ class DoclingFileLoader(BaseLoader):
                         descriptions[page_no] = description
                 except Exception as e:
                     print(f"Error processing image: {e}")
+                    logging.error(f"Error processing image: {e}")
 
         # Interleave descriptions into the document at the correct figure locations
         self.interleave_descriptions(dl_doc, descriptions)
@@ -283,19 +289,23 @@ class DoclingFileLoader(BaseLoader):
             for source in self._file_paths:
                 try:
                     print(f"Processing {source}")
+                    logging.info(f"Processing {source}")
                     dl_doc = self.doc_converter.convert(source).document
                     # Check if the document is a PDF before processing images
                     if source.lower().endswith('.pdf'):
                         print("Processing PDF page images...")
+                        logging.info("Processing PDF page images...")
                         self.process_pdf_page_images(dl_doc)
                     elif source.lower().endswith('.pptx'):
                         print("Processing PPTX page images...")
+                        logging.info("Processing PPTX page images...")
                         self.process_pptx_page_images(dl_doc, source)
                     
                     # Write the structure of the DoclingDocument to the output file
                     output_file.write(f"Docling Document structure for {source}:\n")
                     output_file.write(f"{dl_doc.__dict__}\n\n")  # Write the dictionary structure
                     print(f"Docling Document structure for {source} written to file.")
+                    logging.info(f"Docling Document structure for {source} written to file.")
                     file_name = os.path.basename(source)
                  
                     with open('source_data.txt', "r") as file:
@@ -311,7 +321,6 @@ class DoclingFileLoader(BaseLoader):
                                     extracted_url = match.group(1)  # Extract the matched portion
                                     # Append the filename
                                     source_url = f"{extracted_url}/{file_name}"
-                                    print(source_url)
                                     dl_doc.print_element_tree()
                                     for item, level in dl_doc.iterate_items():
                                         if isinstance(item, TextItem):
@@ -338,14 +347,19 @@ class DoclingFileLoader(BaseLoader):
                                     
                 except PermissionError as e:
                     print(f"PermissionError: {e}")
+                    logging.error(f"PermissionError: {e}")
                     print("Ensure that the file is not open in another program and you have the necessary permissions.")
+                    logging.warning("Ensure that the file is not open in another program and you have the necessary permissions.")
                     continue  # Skip this file and continue with others
                 except FileNotFoundError as e:
                     print(f"FileNotFoundError: {e}")
+                    logging.error(f"FileNotFoundError: {e}")
                     print("Ensure that the file exists at the specified path.")
+                    logging.warning("Ensure that the file exists at the specified path.")
                     continue  # Skip this file and continue with others
                 except Exception as e:
                     print(f"Unexpected error processing {source}: {e}")
+                    logging.error(f"Unexpected error processing {source}: {e}")
                     continue  # Skip this file and continue with others
 
         return documents  # Return the list of documents
@@ -353,10 +367,10 @@ class DoclingFileLoader(BaseLoader):
 
     def load(self):
         try:
-            print('hi6')
             return list(self.lazy_load())  # Will consume the generator
         except StopIteration:
             return []  # Handle StopIteration gracefully, return empty list
         except Exception as e:
             print(f"An error occurred: {e}")
+            logging.error(f"An error occurred: {e}")
             return []
