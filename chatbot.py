@@ -12,7 +12,7 @@ from langdetect import detect
 from deep_translator import GoogleTranslator
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
-
+import re
 from unstructured.staging.base import elements_from_json
 
 import numpy as np
@@ -41,7 +41,17 @@ class Chatbot:
         for i in range(1, 6):  # Simulate response in 5 chunks
             time.sleep(1)  # Simulate time delay for streaming
             yield response
-
+    def is_greeting(self, query):
+        # Regex pattern for detecting greetings
+        greeting_pattern = r'\b(hello|hi|hey|howdy|ciao|buon|giorno|sera|buona|greetings|' \
+                        r'good (morning|afternoon|evening)|' \
+                        r'what(\'s| is) up|yo|sup)\b'
+        return bool(re.search(greeting_pattern, query.lower()))
+    def is_irrelevant(self, answer):
+        pattern = r"^(I\s*apologize|Mi\s*scuso|Non\s*posso|^Non\s*ho\s*sufficienti\s*informazioni\s*per\s*fornire)"
+        
+        # Check if the pattern matches the response
+        return bool(re.search(pattern, answer, re.IGNORECASE))
 
     # Main QA pipeline
     def qa_pipeline(self, st, vectorstore, question, results=None):
@@ -201,30 +211,30 @@ class Chatbot:
                         # Extend the list with empty lists until the index is reached
                          st.session_state['context_history'].extend([[] for _ in range(index - len(st.session_state['context_history']) + 1)])
                     st.session_state['context_history'][index].append(('Context', source + '\n' + "Page Number: " + str(page_no)))
+        if not self.is_greeting(question) and not self.is_irrelevant(response['answer']):
+            if index < len(st.session_state['context_history']):
+                # Extract unique entries based on the last index value (e.g., page number)
+                unique_contexts = []
+                seen_values = set()
 
-        if index < len(st.session_state['context_history']):
-            # Extract unique entries based on the last index value (e.g., page number)
-            unique_contexts = []
-            seen_values = set()
+                for context in st.session_state['context_history'][index]:
+                    # Get the last value (e.g., page number)
+                    last_value = context[1].split()[-1]
+                    print(last_value)
+                    
+                    if last_value not in seen_values:
+                        unique_contexts.append(context)
+                        seen_values.add(last_value)
 
-            for context in st.session_state['context_history'][index]:
-                # Get the last value (e.g., page number)
-                last_value = context[1].split()[-1]
-                print(last_value)
-                
-                if last_value not in seen_values:
-                    unique_contexts.append(context)
-                    seen_values.add(last_value)
+                    # Stop if we already have 3 unique entries
+                    if len(unique_contexts) == 3:
+                        break
 
-                # Stop if we already have 3 unique entries
-                if len(unique_contexts) == 3:
-                    break
-
-        # Display the first 3 unique entries
-        print(unique_contexts)
-        st.info('First 3 unique ' + src + '\n')
-        for unique_context in unique_contexts:
-            st.info(unique_context[1])
+            # Display the first 3 unique entries
+            print(unique_contexts)
+            st.info('First 3 unique ' + src + '\n')
+            for unique_context in unique_contexts:
+                st.info(unique_context[1])
         
     def ensure_italian(self, text):
         #while detect(text) == 'en':

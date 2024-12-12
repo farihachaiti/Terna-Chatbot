@@ -18,7 +18,7 @@ from langchain_community.embeddings import BedrockEmbeddings
 import subprocess
 from langchain.chains.qa_with_sources import load_qa_with_sources_chain
 from langchain_community.vectorstores.utils import filter_complex_metadata
-
+import re
 import numpy as np
 import openai
 import backoff
@@ -286,8 +286,8 @@ class PreProcessor:
                 if metadata['filename'] == filename:
                     ids_to_del.append(id)
   
-            vector_store.adelete(ids=ids_to_del) 
-          
+            vector_store.delete(ids=ids_to_del) 
+            vector_store.reset_collection()
             print(f"Deleted vectorstore entry for {filename}")
             logging.info(f"Deleted vectorstore entry for {filename}")
         except Exception as e:
